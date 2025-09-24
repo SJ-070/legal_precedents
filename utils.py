@@ -40,8 +40,8 @@ def get_conversation_history(max_messages=10):
 # 데이터 파일 존재 여부 확인 함수
 def check_data_files():
     """필요한 데이터 파일 존재 여부 확인"""
-    court_file = "관세분야판례423개.json"
-    tax_file = "국가법령정보센터_관세판례.json"
+    court_file = "data_kcs.json"
+    tax_file = "data_moleg.json"
     
     files_exist = True
     if not os.path.exists(court_file):
@@ -116,12 +116,12 @@ def load_data():
     """판례 데이터 로드"""
     try:
         # 판례 데이터 로드1
-        with open("관세분야판례423개.json", "r", encoding="utf-8") as f:
+        with open("data_kcs.json", "r", encoding="utf-8") as f:
             court_cases = json.load(f)
         st.sidebar.success(f"판례 데이터 로드 완료: {len(court_cases)}건")
 
         # 판례 데이터 로드2
-        with open("국가법령정보센터_관세판례.json", "r", encoding="utf-8") as f:
+        with open("data_moleg.json", "r", encoding="utf-8") as f:
             tax_cases = json.load(f)
         st.sidebar.success(f"판례 데이터 로드 완료: {len(tax_cases)}건")
         
