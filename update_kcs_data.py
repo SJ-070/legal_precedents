@@ -103,21 +103,8 @@ def merge_data(new_data, existing_file='data_kcs.json'):
     try:
         df = pd.DataFrame(combined_data)
 
-        # 주요 필드를 기준으로 중복 제거
-        # 사건명, 법원, 선고일자를 주요 식별 필드로 사용
-        key_columns = []
-        if '사건명' in df.columns:
-            key_columns.append('사건명')
-        if '법원' in df.columns:
-            key_columns.append('법원')
-        if '선고일자' in df.columns:
-            key_columns.append('선고일자')
-
-        # 주요 필드가 있으면 해당 필드로 중복 제거, 없으면 전체 레코드로 중복 제거
-        if key_columns:
-            df_unique = df.drop_duplicates(subset=key_columns, keep='first')
-        else:
-            df_unique = df.drop_duplicates(keep='first')
+        # 전체 필드를 기준으로 중복 제거 (더 정확한 중복 탐지)
+        df_unique = df.drop_duplicates(keep='first')
 
         unique_data = df_unique.to_dict(orient='records')
 
