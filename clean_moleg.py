@@ -1,10 +1,97 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-MOLEG Data Cleaner
-Focus on:
-1. Remove duplicates if any
-2. Extract structured fields from '내용' field
+MOLEG Data Cleaner - 법무부 국가법령정보센터 관세 판례 데이터 정제 도구
+법무부 국가법령정보센터(MOLEG) 관세 판례 데이터 정제 및 구조화 도구
+
+=== 주요 기능 ===
+
+1. 중복 제거 (Duplicate Removal)
+   - 목적: 동일한 판례번호로 중복 수집된 데이터 제거
+   - 기준 1: 정확한 판례번호 일치
+     예시: "대법원 2023다12345" 판례번호가 여러 개 있으면 첫 번째만 유지
+   - 기준 2: 유사한 내용 탐지
+     방식: '내용' 필드의 첫 200자를 서명(signature)으로 사용하여 유사 판례 탐지
+     예시: 동일한 시작 텍스트를 가진 다른 판례번호들을 중복으로 판단
+
+2. 구조화 필드 추출 (Structured Field Extraction)
+   - 목적: '내용' 필드에서 구조화된 정보를 추출하여 검색 및 분석 향상
+   - 추출 필드:
+
+   2.1. 선고일자 (Decision Date)
+        - 패턴: "2024. 1. 1. 선고", "2024-01-01", "2024년 1월 1일"
+        - 범위: 1990년~2025년 (합리적 연도 범위)
+        - 형식: YYYY-MM-DD 표준화
+
+   2.2. 법원명 (Court Name)
+        - 패턴: 대법원, 고등법원, 지방법원 등
+        - 예시: "서울고등법원", "인천지방법원", "대법원"
+        - 정제: 대괄호, 연도 정보 제거 후 20자 이내로 제한
+
+   2.3. 사건유형 (Case Type)
+        - 관세 관련 사건 유형 탐지
+        - 패턴: "관세법위반", "관세포탈", "밀수입", "관세부과취소" 등
+        - 길이: 50자 이내로 제한
+
+   2.4. 판결요지 (Decision Summary)
+        - 패턴: 【판시사항】, 【판결요지】, 【요지】 섹션에서 추출
+        - 최소 길이: 30자 이상 (실질적 내용 보장)
+        - 최대 길이: 800자 (너무 길면 말줄임표 추가)
+        - 정제: 공백 정규화
+
+   2.5. 참조조문 (Referenced Articles)
+        - 패턴: 【참조조문】, 【참조법조】, 【관련조문】 섹션에서 추출
+        - 길이: 500자 이내로 제한
+        - 정제: 공백 정규화
+
+   2.6. 판결결과 (Decision Result)
+        - 패턴: "파기", "기각", "인용", "취소", "환송", "승소", "패소" 등
+        - 우선순위: 주문, 판결, 결론 맥락에서 먼저 검색
+        - 대안: 직접 패턴 매칭
+
+3. 안전 장치 (Safety Features)
+   - 백업 생성: 원본 파일을 자동으로 백업
+     형식: data_moleg_backup_YYYYMMDD_HHMMSS.json
+   - Dry Run 모드: 실제 변경 전 결과 미리보기 제공
+     dry_run=True (기본값): 미리보기만, 파일 변경 없음
+     dry_run=False: 실제 정제 및 구조화 작업 수행
+   - 진행률 표시: 100건마다 처리 진행률 출력
+   - 샘플 표시: 추출 결과의 첫 3개 샘플을 화면에 출력
+
+=== 사용법 ===
+
+1. 미리보기 모드 (기본):
+   cleaner = MOLEGDataCleaner()
+   results = cleaner.clean_and_extract(dry_run=True)
+
+2. 실제 정제 및 구조화 수행:
+   cleaner = MOLEGDataCleaner()
+   results = cleaner.clean_and_extract(dry_run=False)
+
+=== 출력 형식 ===
+
+생성 파일:
+- data_moleg.json: 구조화된 필드가 추가된 정제 데이터 (원본 파일 덮어쓰기)
+- moleg_cleaning_report.json: 상세한 정제 및 추출 통계 보고서
+- data_moleg_backup_YYYYMMDD_HHMMSS.json: 원본 파일 백업
+
+반환값 (딕셔너리):
+- original_count: 원본 데이터 항목 수
+- deduplicated_count: 중복 제거 후 데이터 항목 수
+- duplicates_removed: 중복으로 제거된 항목 수
+- extraction_stats: 각 필드별 추출 성공 통계
+- latest_date: 추출된 가장 최근 선고일자
+- enriched_data: 구조화된 데이터 (dry_run=False일 때만)
+
+=== 처리 통계 예시 ===
+
+추출 성공률:
+- 선고일자: 85.2% (1,234건/1,450건)
+- 법원명: 92.1% (1,335건/1,450건)
+- 사건유형: 78.9% (1,144건/1,450건)
+- 판결요지: 68.3% (991건/1,450건)
+- 참조조문: 45.7% (663건/1,450건)
+- 판결결과: 89.4% (1,296건/1,450건)
 """
 
 import json
@@ -362,11 +449,10 @@ class MOLEGDataCleaner:
             # Create backup
             self.create_backup(self.moleg_data_file)
 
-            # Save enriched data
-            enriched_filename = self.moleg_data_file.replace('.json', '_enriched.json')
-            with open(enriched_filename, 'w', encoding='utf-8') as f:
+            # Save enriched data to original file
+            with open(self.moleg_data_file, 'w', encoding='utf-8') as f:
                 json.dump(enriched_data, f, ensure_ascii=False, indent=2)
-            print(f"\n✓ Enriched data saved to: {enriched_filename}")
+            print(f"\n✓ Enriched data saved to: {self.moleg_data_file}")
 
             # Generate detailed report
             report = {
@@ -434,3 +520,6 @@ if __name__ == "__main__":
     print("=" * 60)
     print("To apply the changes, uncomment and run:")
     print("# results = cleaner.clean_and_extract(dry_run=False)")
+
+    # Run real run
+    results = cleaner.clean_and_extract(dry_run=False)
