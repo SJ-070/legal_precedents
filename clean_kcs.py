@@ -169,5 +169,5 @@ if __name__ == "__main__":
     results = cleaner.clean_kcs_data(dry_run=True)
 
     print(f"\n" + "=" * 40)
-    print("실제 적용하려면 다음을 실행하세요:")
-    print("results = cleaner.clean_kcs_data(dry_run=False)")
+    print("실제 적용하겠습니다.")
+    results = cleaner.clean_kcs_data(dry_run=False)
