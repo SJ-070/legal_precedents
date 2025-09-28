@@ -1,4 +1,22 @@
 ###############
+# KCS Customs Legal Precedent Crawler
+#
+# This program automatically visits the Korean Customs Service website
+# and collects legal precedent data to keep our chatbot's knowledge up-to-date.
+#
+# How it works:
+# 1. Opens the customs portal website using an automated browser
+# 2. Navigates to the legal precedents section (법령판례등 > 판례결정례 > 소송)
+# 3. Goes through multiple pages collecting case information
+# 4. For each case, clicks the title to view details and extracts:
+#    - Court name, case number, judgment date, case summary, etc.
+# 5. Removes duplicate entries and saves all data as JSON
+#
+# The program runs without showing a browser window (headless mode)
+# and is designed to work both locally and on cloud servers.
+###############
+
+###############
 # Environments
 ###############
 
@@ -191,15 +209,14 @@ class CustomsCrawler:
             print(f"Error moving to page {page_num}: {e}")
             return False
             
-    def crawl_data(self, start_date='2024-01-01', max_pages=8, progress_callback=None):
+    def crawl_data(self, max_pages=8, progress_callback=None):
         """
         메인 크롤링 함수
-        
+
         Args:
-            start_date (str): 검색 시작일 (YYYY-MM-DD 형식)
             max_pages (int): 크롤링할 최대 페이지 수
             progress_callback (function): 진행률 콜백 함수
-            
+
         Returns:
             list: 크롤링된 데이터 리스트
         """
@@ -279,19 +296,15 @@ class CustomsCrawler:
 if __name__ == "__main__":
     # 테스트 실행
     crawler = CustomsCrawler()
-    
-    # 오늘 날짜 계산
-    today = datetime.now().strftime('%Y-%m-%d')
-    srchStDt = '2024-01-01'
-    
+
     print("크롤링 시작...")
-    data = crawler.crawl_data(start_date=srchStDt, max_pages=3)  # 테스트용으로 3페이지만
+    data = crawler.crawl_data(max_pages=1)  # 테스트용으로 3페이지만
     
     if data:
         print(f"크롤링 완료! 총 {len(data)}건의 데이터를 수집했습니다.")
         
         # 데이터 저장
-        output_file = f"rulings_scraped_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        output_file = "data_kcs_temp.json"
         with open(output_file, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
             
