@@ -1,6 +1,60 @@
 ###############
 # 국가법령정보센터 판례 크롤러
 ###############
+"""
+국가법령정보센터(MOLEG) 관세 관련 판례 크롤러
+
+=== 작동 방식 ===
+
+1. 웹사이트 접근 및 검색
+   - 국가법령정보센터(law.go.kr) 접속
+   - "판례·해석례등" 메뉴로 이동
+   - 검색어(기본값: "관세") 입력하여 검색 실행
+
+2. 검색 결과 페이지 처리
+   - 지정된 페이지 수만큼 순차적으로 처리
+   - 각 페이지의 판례 목록을 테이블 형태로 추출
+   - 제목행과 내용행이 쌍을 이루는 구조로 파싱
+
+3. 판례 분류 및 처리
+   - 내부 판례: onclick="lsEmpViewWideAll" 속성 → 상세 내용 추출
+   - 외부 링크: showExternalLink 또는 href 속성 → 스킵
+   - 각 판례별로 제목, 내용, URL 등 기본 정보 수집
+
+4. 상세 내용 추출 (내부 판례만)
+   - 판례 링크 클릭으로 상세 페이지 로드
+   - 판례번호, 판결요지, 전문 등 구조화된 정보 추출
+   - 목록으로 되돌아가기 위해 "목록영역 늘리기" 버튼 클릭
+
+5. 데이터 정제 및 저장
+   - 수집된 데이터에서 중복 제거 (제목, URL 기준)
+   - JSON 형태로 data_moleg_temp.json에 저장
+   - 판례 전문이 있는 항목만 별도 파일로 저장
+
+=== 주요 특징 ===
+
+- Selenium WebDriver 사용으로 JavaScript 렌더링 처리
+- 헤드리스 모드 지원으로 서버 환경에서 실행 가능
+- 진행률 콜백 기능으로 실시간 상태 확인
+- 오류 복구 메커니즘으로 안정적인 크롤링
+- 외부 링크 자동 필터링으로 관련 판례만 수집
+
+=== 사용법 ===
+
+기본 사용:
+    crawler = LawPortalCrawler()
+    data = crawler.crawl_data(search_keyword="관세", max_pages=5)
+
+진행률 콜백과 함께:
+    def progress_callback(current, total, collected_count):
+        print(f"진행률: {current}/{total}, 수집: {collected_count}건")
+
+    data = crawler.crawl_data(
+        search_keyword="관세",
+        max_pages=10,
+        progress_callback=progress_callback
+    )
+"""
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
