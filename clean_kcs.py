@@ -1,14 +1,63 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-KCS Data Cleaner
-Conservative cleaning approach for data_kcs.json only
+KCS Data Cleaner - Simplified Version
+한국관세청(KCS) 법원 판례 데이터 정제 도구
+
+=== 주요 기능 ===
+
+1. 최소 콘텐츠 필터링 (Minimal Content Removal)
+   - 목적: 실질적인 내용이 없는 빈 데이터 제거
+   - 기준: 핵심 필드의 총 글자 수 < 20자
+   - 대상 필드: ['판결주문', '청구취지', '판결이유']
+   - 작업 방식: 세 필드의 텍스트 길이를 합쳐서 20자 미만이면 삭제
+
+   예시:
+     판결주문: "기각" (2자)
+     청구취지: "승소" (2자)
+     판결이유: "근거없음" (4자)
+     총합: 8자 → 삭제됨
+
+2. 중복 제거 (Duplicate Removal)
+   - 목적: 크롤링 과정에서 발생한 중복 데이터 제거
+   - 기준: 동일한 '사건번호' 필드값
+   - 작업 방식: 같은 사건번호가 여러 개 있으면 첫 번째만 유지, 나머지 삭제
+
+   예시:
+     사건번호: "2023구합12345" → 첫 번째 항목만 유지
+     사건번호: "2023구합12345" → 삭제됨
+
+3. 안전 장치 (Safety Features)
+   - 백업 생성: 원본 파일을 자동으로 백업
+     형식: data_kcs_backup_YYYYMMDD_HHMMSS.json
+   - Dry Run 모드: 실제 변경 전 결과 미리보기 제공
+     dry_run=True (기본값): 미리보기만, 파일 변경 없음
+     dry_run=False: 실제 정제 작업 수행
+   - 로깅: 모든 정제 과정과 결과를 콘솔에 출력
+     (제거된 항목 수, 보존율 등 통계 정보 포함)
+
+=== 사용법 ===
+
+1. 미리보기 모드 (기본):
+   cleaner = KCSDataCleaner()
+   results = cleaner.clean_kcs_data(dry_run=True)
+
+2. 실제 정제 수행:
+   cleaner = KCSDataCleaner()
+   results = cleaner.clean_kcs_data(dry_run=False)
+
+=== 출력 형식 ===
+
+반환값 (딕셔너리):
+- original_count: 원본 데이터 항목 수
+- cleaned_count: 정제 후 데이터 항목 수
+- removed_minimal: 최소 콘텐츠로 제거된 항목 수
+- removed_duplicates: 중복으로 제거된 항목 수
+- cleaned_data: 정제된 데이터 (dry_run=False일 때만)
 """
 
 import json
-import re
 from datetime import datetime
-import os
 import shutil
 
 class KCSDataCleaner:
@@ -25,70 +74,51 @@ class KCSDataCleaner:
 
     def clean_kcs_data(self, dry_run=True):
         """
-        Clean data_kcs.json using conservative approach
-        Conservative Criteria:
+        Clean data_kcs.json with essential criteria only:
         1. Remove entries with total content < 20 characters in key fields
         2. Remove exact duplicates (keep first occurrence)
         """
-        print("=" * 60)
-        print("CLEANING data_kcs.json (Conservative Approach)")
-        print("=" * 60)
+        print("=" * 50)
+        print("KCS 데이터 정제 - 핵심 기능만")
+        print("=" * 50)
 
         # Load data
         with open(self.kcs_data_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
         original_count = len(data)
-        print(f"Original entries: {original_count}")
-
-        # Track removed entries for reporting
-        removed_entries = {
-            'minimal_content': [],
-            'duplicates': []
-        }
+        print(f"원본 항목 수: {original_count}")
 
         cleaned_data = []
         seen_case_numbers = set()
+        removed_minimal = 0
+        removed_duplicates = 0
 
         key_fields = ['판결주문', '청구취지', '판결이유']
 
-        print(f"\nApplying cleaning criteria:")
-        print(f"1. Remove entries with < 20 total characters in key fields")
-        print(f"2. Remove exact duplicates (keep first occurrence)")
+        print(f"\n정제 기준:")
+        print(f"1. 핵심 필드 총 글자 수 < 20자 제거")
+        print(f"2. 중복 사건번호 제거 (첫 번째만 유지)")
 
-        for i, entry in enumerate(data):
+        for entry in data:
             case_number = entry.get('사건번호', '').strip()
 
-            # Criteria 1: Check for minimal content (< 20 total characters)
+            # 1. 최소 콘텐츠 확인
             total_content_length = 0
             for field in key_fields:
                 content = str(entry.get(field, '')).strip()
                 total_content_length += len(content)
 
             if total_content_length < 20:
-                removed_entries['minimal_content'].append({
-                    'index': i,
-                    'case_number': case_number,
-                    'date': entry.get('선고일자\n(종결일자)', ''),
-                    'total_chars': total_content_length,
-                    'details': {
-                        '판결주문': len(str(entry.get('판결주문', '')).strip()),
-                        '청구취지': len(str(entry.get('청구취지', '')).strip()),
-                        '판결이유': len(str(entry.get('판결이유', '')).strip())
-                    }
-                })
+                removed_minimal += 1
                 continue
 
-            # Criteria 2: Check for duplicates (keep first occurrence)
+            # 2. 중복 확인
             if case_number and case_number in seen_case_numbers:
-                removed_entries['duplicates'].append({
-                    'index': i,
-                    'case_number': case_number,
-                    'date': entry.get('선고일자\n(종결일자)', '')
-                })
+                removed_duplicates += 1
                 continue
 
-            # Add to cleaned data
+            # 정제된 데이터에 추가
             cleaned_data.append(entry)
             if case_number:
                 seen_case_numbers.add(case_number)
@@ -96,164 +126,48 @@ class KCSDataCleaner:
         cleaned_count = len(cleaned_data)
         removed_count = original_count - cleaned_count
 
-        # Report cleaning results
-        print(f"\n" + "=" * 40)
-        print("CLEANING RESULTS")
-        print("=" * 40)
-        print(f"├─ Removed for minimal content: {len(removed_entries['minimal_content'])}")
-        print(f"├─ Removed duplicates: {len(removed_entries['duplicates'])}")
-        print(f"├─ Total removed: {removed_count}")
-        print(f"├─ Final count: {cleaned_count}")
-        print(f"└─ Retention rate: {(cleaned_count/original_count)*100:.1f}%")
+        # 결과 출력
+        print(f"\n" + "=" * 30)
+        print("정제 결과")
+        print("=" * 30)
+        print(f"최소 콘텐츠 제거: {removed_minimal}건")
+        print(f"중복 제거: {removed_duplicates}건")
+        print(f"총 제거: {removed_count}건")
+        print(f"최종 데이터: {cleaned_count}건")
+        print(f"보존율: {(cleaned_count/original_count)*100:.1f}%")
 
-        # Show examples of removed entries
-        if removed_entries['minimal_content']:
-            print(f"\n" + "=" * 40)
-            print("EXAMPLES OF MINIMAL CONTENT ENTRIES REMOVED")
-            print("=" * 40)
-            for i, item in enumerate(removed_entries['minimal_content'][:5]):
-                print(f"{i+1}. Case: {item['case_number']}")
-                print(f"   Date: {item['date']}")
-                print(f"   Total chars: {item['total_chars']}")
-                print(f"   Field lengths: 판결주문={item['details']['판결주문']}, 청구취지={item['details']['청구취지']}, 판결이유={item['details']['판결이유']}")
-                print()
-
-        if removed_entries['duplicates']:
-            print(f"DUPLICATE ENTRIES REMOVED:")
-            for item in removed_entries['duplicates']:
-                print(f"  - Case: {item['case_number']} (Date: {item['date']})")
-
-        # Validate cleaned data
-        print(f"\n" + "=" * 40)
-        print("DATA VALIDATION")
-        print("=" * 40)
-
-        # Check cleaned data quality
-        high_quality = 0
-        medium_quality = 0
-        low_quality = 0
-
-        for entry in cleaned_data:
-            score = 0
-            for field in key_fields:
-                content = str(entry.get(field, '')).strip()
-                if content and len(content) > 50:
-                    score += 1
-                elif content and len(content) > 10:
-                    score += 0.5
-
-            if score >= 2:
-                high_quality += 1
-            elif score >= 1:
-                medium_quality += 1
-            else:
-                low_quality += 1
-
-        print(f"Quality distribution in cleaned data:")
-        print(f"├─ High quality (score >= 2): {high_quality} ({(high_quality/cleaned_count)*100:.1f}%)")
-        print(f"├─ Medium quality (1 <= score < 2): {medium_quality} ({(medium_quality/cleaned_count)*100:.1f}%)")
-        print(f"└─ Low quality (score < 1): {low_quality} ({(low_quality/cleaned_count)*100:.1f}%)")
-
-        # Save cleaned data
+        # 데이터 저장
         if not dry_run:
-            # Create backup first
+            # 백업 생성
             self.create_backup(self.kcs_data_file)
 
-            # Save cleaned data
-            cleaned_filename = self.kcs_data_file.replace('.json', '_cleaned.json')
-            with open(cleaned_filename, 'w', encoding='utf-8') as f:
+            # 정제된 데이터 저장
+            with open(self.kcs_data_file, 'w', encoding='utf-8') as f:
                 json.dump(cleaned_data, f, ensure_ascii=False, indent=2)
-            print(f"\n✓ Cleaned data saved to: {cleaned_filename}")
-
-            # Generate detailed cleaning report
-            report = {
-                'cleaning_summary': {
-                    'original_count': original_count,
-                    'cleaned_count': cleaned_count,
-                    'removed_count': removed_count,
-                    'retention_rate': round((cleaned_count/original_count)*100, 2)
-                },
-                'removal_details': {
-                    'minimal_content_entries': len(removed_entries['minimal_content']),
-                    'duplicate_entries': len(removed_entries['duplicates'])
-                },
-                'cleaning_criteria': [
-                    'Total content in key fields (판결주문, 청구취지, 판결이유) < 20 characters',
-                    'Exact duplicate case numbers (kept first occurrence)'
-                ],
-                'quality_distribution': {
-                    'high_quality': high_quality,
-                    'medium_quality': medium_quality,
-                    'low_quality': low_quality
-                },
-                'removed_entries_details': {
-                    'minimal_content': removed_entries['minimal_content'],
-                    'duplicates': removed_entries['duplicates']
-                },
-                'timestamp': datetime.now().isoformat(),
-                'backup_file': f"{self.kcs_data_file}{self.backup_suffix}"
-            }
-
-            with open('kcs_cleaning_report.json', 'w', encoding='utf-8') as f:
-                json.dump(report, f, ensure_ascii=False, indent=2)
-            print("✓ Detailed cleaning report saved to: kcs_cleaning_report.json")
+            print(f"\n✓ 정제된 데이터가 {self.kcs_data_file}에 저장되었습니다")
 
         else:
-            print(f"\n[DRY RUN] Would clean {removed_count} entries")
-            print(f"[DRY RUN] To apply changes, run with dry_run=False")
+            print(f"\n[미리보기] {removed_count}건이 제거될 예정입니다")
+            print(f"[미리보기] 실제 적용하려면 dry_run=False로 실행하세요")
 
         return {
             'original_count': original_count,
             'cleaned_count': cleaned_count,
-            'removed_entries': removed_entries,
+            'removed_minimal': removed_minimal,
+            'removed_duplicates': removed_duplicates,
             'cleaned_data': cleaned_data if not dry_run else None
         }
-
-    def get_latest_date(self):
-        """Get latest date from KCS data for update baseline"""
-        with open(self.kcs_data_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-
-        dates = []
-        date_field = '선고일자\n(종결일자)'
-
-        for entry in data:
-            date_str = str(entry.get(date_field, '')).strip()
-            if date_str and re.match(r'\d{4}-\d{2}-\d{2}', date_str):
-                try:
-                    date_obj = datetime.strptime(date_str, '%Y-%m-%d')
-                    dates.append(date_obj)
-                except:
-                    continue
-
-        latest_date = max(dates) if dates else None
-
-        print(f"\n" + "=" * 40)
-        print("BASELINE DATE INFORMATION")
-        print("=" * 40)
-        print(f"Latest date in KCS data: {latest_date.strftime('%Y-%m-%d') if latest_date else 'None'}")
-        print(f"Total valid dates: {len(dates)}")
-        if dates:
-            print(f"Date range: {min(dates).strftime('%Y-%m-%d')} to {latest_date.strftime('%Y-%m-%d')}")
-
-        return latest_date
 
 if __name__ == "__main__":
     cleaner = KCSDataCleaner()
 
-    print("KCS DATA CLEANING TOOL")
-    print("Conservative approach approved for data_kcs.json")
+    print("KCS 데이터 정제 도구 - 간소화 버전")
     print()
 
-    # Run dry run first
-    print("Running DRY RUN to preview changes...")
+    # 미리보기 실행
+    print("미리보기 모드로 실행 중...")
     results = cleaner.clean_kcs_data(dry_run=True)
 
-    # Get baseline date
-    latest_date = cleaner.get_latest_date()
-
-    print(f"\n" + "=" * 60)
-    print("READY TO APPLY CLEANING")
-    print("=" * 60)
-    print("To apply the cleaning changes, uncomment and run:")
-    print("# results = cleaner.clean_kcs_data(dry_run=False)")
+    print(f"\n" + "=" * 40)
+    print("실제 적용하려면 다음을 실행하세요:")
+    print("results = cleaner.clean_kcs_data(dry_run=False)")
