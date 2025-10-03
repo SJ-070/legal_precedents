@@ -9,6 +9,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 import zipfile
 import tempfile
 from dotenv import load_dotenv
+import pickle
+import hashlib
 
 # --- 환경 변수 및 Gemini API 설정 ---
 load_dotenv()
@@ -129,6 +131,45 @@ def extract_text_from_item(item, data_type):
         return ' '.join(text_parts)
     
 
+# 캐시 키 생성 함수
+def get_cache_key():
+    """데이터 파일의 수정 시간을 기반으로 캐시 키 생성"""
+    try:
+        kcs_mtime = os.path.getmtime("data_kcs.json")
+        moleg_mtime = os.path.getmtime("data_moleg.json")
+        cache_string = f"{kcs_mtime}_{moleg_mtime}"
+        return hashlib.md5(cache_string.encode()).hexdigest()
+    except:
+        return "default"
+
+# 벡터화 결과 저장 함수
+def save_vectorization_cache(preprocessed_data, cache_key):
+    """벡터화 결과를 pickle 파일로 저장"""
+    cache_file = f"vectorization_cache_{cache_key}.pkl"
+    try:
+        with open(cache_file, 'wb') as f:
+            pickle.dump(preprocessed_data, f)
+        logging.info(f"벡터화 캐시 저장 완료: {cache_file}")
+        return True
+    except Exception as e:
+        logging.error(f"벡터화 캐시 저장 실패: {str(e)}")
+        return False
+
+# 벡터화 결과 로드 함수
+def load_vectorization_cache(cache_key):
+    """저장된 벡터화 결과를 pickle 파일에서 로드"""
+    cache_file = f"vectorization_cache_{cache_key}.pkl"
+    try:
+        if os.path.exists(cache_file):
+            with open(cache_file, 'rb') as f:
+                preprocessed_data = pickle.load(f)
+            logging.info(f"벡터화 캐시 로드 완료: {cache_file}")
+            return preprocessed_data
+        return None
+    except Exception as e:
+        logging.error(f"벡터화 캐시 로드 실패: {str(e)}")
+        return None
+
 # 데이터 로드 함수 - 초기화 시 1번만 호출
 @st.cache_data
 def load_data():
@@ -137,17 +178,31 @@ def load_data():
         # 판례 데이터 로드1
         with open("data_kcs.json", "r", encoding="utf-8") as f:
             court_cases = json.load(f)
-        st.sidebar.success(f"판례 데이터 로드 완료: {len(court_cases)}건")
+        st.sidebar.success(f"KCS 판례 데이터 로드 완료: {len(court_cases)}건")
 
         # 판례 데이터 로드2
         with open("data_moleg.json", "r", encoding="utf-8") as f:
             tax_cases = json.load(f)
-        st.sidebar.success(f"판례 데이터 로드 완료: {len(tax_cases)}건")
-        
-        # 데이터 전처리 및 벡터화 
-        preprocessed_data = preprocess_data(court_cases, tax_cases)
+        st.sidebar.success(f"MOLEG 판례 데이터 로드 완료: {len(tax_cases)}건")
+
+        # 캐시 키 생성
+        cache_key = get_cache_key()
+
+        # 캐시된 벡터화 결과 확인
+        preprocessed_data = load_vectorization_cache(cache_key)
+
+        if preprocessed_data is not None:
+            st.sidebar.info("저장된 벡터화 인덱스를 로드했습니다.")
+        else:
+            # 캐시가 없으면 데이터 전처리 및 벡터화 수행
+            st.sidebar.info("벡터화 인덱스를 생성 중입니다...")
+            preprocessed_data = preprocess_data(court_cases, tax_cases)
+            # 벡터화 결과 저장
+            save_vectorization_cache(preprocessed_data, cache_key)
+            st.sidebar.success("벡터화 인덱스 생성 및 저장 완료!")
+
         return court_cases, tax_cases, preprocessed_data
-        
+
     except FileNotFoundError as e:
         st.sidebar.error(f"파일을 찾을 수 없습니다: {e}")
         st.error("필수 데이터 파일을 찾을 수 없습니다. 애플리케이션 디렉토리에 필요한 파일이 있는지 확인하세요.")
@@ -159,161 +214,152 @@ def load_data():
 
 # 새로운 함수: 데이터 전처리 및 벡터화 (최초 1회만 실행)
 def preprocess_data(court_cases, tax_cases):
-    """데이터 전처리 및 벡터화 - 검색에 필요한 모든 정보를 미리 준비"""
-    result = {
-        "court_corpus": [],
-        "tax_corpus": [],
-        "court_chunks": [],
-        "court_vectorizers": [],
-        "court_tfidf_matrices": [],
-        "tax_chunks": [],
-        "tax_vectorizers": [],
-        "tax_tfidf_matrices": []
-    }
-    
-    # 1. 판례 데이터 분할 및 전처리
-    court_chunks = split_court_cases(court_cases)
-    result["court_chunks"] = court_chunks
+    """데이터 전처리 및 벡터화 - Character n-gram 방식으로 통합 벡터화"""
+    logging.info("Character n-gram 벡터화 시작...")
 
-    # 불용어 정의
-    LEGAL_STOPWORDS = [
-        # 기본 불용어
-        '제', '것', '등', '때', '경우', '바', '수', '점', '면', '이', '그', '저', '은', '는', '을', '를', '에', '의', '으로', 
-        '따라', '또는', '및', '있다', '한다', '되어', '인한', '대한', '관한', '위한', '통한', '같은', '다른',
-        
-        # 법령 구조 불용어
-        '조항', '규정', '법률', '법령', '조문', '항목', '세부', '내용', '사항', '요건', '기준', '방법', '절차',
-        
-        # 일반적인 동사/형용사
-        '해당', '관련', '포함', '제외', '적용', '시행', '준용', '의하다', '하다', '되다', '있다', '없다', '같다'
-    ]
-    
-    # 2. 각 판례 데이터 청크별 전처리 및 벡터화
-    for chunk in court_chunks:
-        court_corpus = []
-        for item in chunk:
+    # 1. KCS와 MOLEG 데이터 통합
+    all_data = []
+    data_sources = []  # 각 문서의 출처 추적 ('kcs' 또는 'moleg')
+
+    # KCS 데이터 추가
+    for item in court_cases:
+        all_data.append(item)
+        data_sources.append('kcs')
+
+    # MOLEG 데이터 추가
+    for item in tax_cases:
+        all_data.append(item)
+        data_sources.append('moleg')
+
+    logging.info(f"통합 데이터: KCS {len(court_cases)}건 + MOLEG {len(tax_cases)}건 = 총 {len(all_data)}건")
+
+    # 2. 전체 코퍼스 생성
+    corpus = []
+    for i, item in enumerate(all_data):
+        if data_sources[i] == 'kcs':
             text = extract_text_from_item(item, "court_case")
-            court_corpus.append(preprocess_text(text))
-        
-        result["court_corpus"].append(court_corpus)
-        
-        if court_corpus:
-            court_vectorizer = TfidfVectorizer(
-                ngram_range=(1, 2),
-                stop_words=LEGAL_STOPWORDS,
-                min_df=1,
-                max_df=0.8,
-                sublinear_tf=True,
-                use_idf=True,
-                smooth_idf=True,
-                norm='l2'
-            )
-            court_tfidf_matrix = court_vectorizer.fit_transform(court_corpus)
-            result["court_vectorizers"].append(court_vectorizer)
-            result["court_tfidf_matrices"].append(court_tfidf_matrix)
-    
-    # 3. 국가법령정보센터 관세판례 데이터 분할
-    tax_chunks = split_tax_cases(tax_cases)
-    result["tax_chunks"] = tax_chunks
-    
-    # 4. 각 국가법령정보센터 관세판례 청크별 전처리 및 벡터화
-    for chunk in tax_chunks:
-        tax_corpus = []
-        for item in chunk:
+        else:
             text = extract_text_from_item(item, "tax_case")
-            tax_corpus.append(preprocess_text(text))
-        
-        result["tax_corpus"].append(tax_corpus)
-        
-        if tax_corpus:
-            tax_vectorizer = TfidfVectorizer()
-            tax_tfidf_matrix = tax_vectorizer.fit_transform(tax_corpus)
-            result["tax_vectorizers"].append(tax_vectorizer)
-            result["tax_tfidf_matrices"].append(tax_tfidf_matrix)
-    
-    logging.info("데이터 전처리 및 벡터화 완료")
+        corpus.append(preprocess_text(text))
+
+    # 3. Character n-gram TF-IDF 벡터화 (테스트에서 검증된 최고 성능 방식)
+    vectorizer = TfidfVectorizer(
+        analyzer='char',
+        ngram_range=(2, 4),
+        max_df=0.9,
+        min_df=1,
+        max_features=50000,  # 차원 폭발 방지
+        sublinear_tf=True,
+        use_idf=True,
+        smooth_idf=True,
+        norm='l2'
+    )
+
+    logging.info("Character n-gram 벡터화 수행 중...")
+    tfidf_matrix = vectorizer.fit_transform(corpus)
+    logging.info(f"벡터화 완료: {len(vectorizer.vocabulary_):,}개 character n-gram 특징")
+
+    # 4. 에이전트별로 데이터를 6개 청크로 분할 (기존 로직 유지)
+    # Agent 1-2: KCS 데이터 2분할
+    kcs_size = len(court_cases)
+    kcs_chunk_size = kcs_size // 2
+
+    # Agent 3-6: MOLEG 데이터 4분할
+    moleg_size = len(tax_cases)
+    moleg_chunk_size = moleg_size // 4
+
+    chunks_info = []
+
+    # Agent 1-2 (KCS)
+    for i in range(2):
+        start_idx = i * kcs_chunk_size
+        end_idx = (i + 1) * kcs_chunk_size if i < 1 else kcs_size
+        chunks_info.append({
+            'agent_type': 'court_case',
+            'start_idx': start_idx,
+            'end_idx': end_idx,
+            'data_type': 'kcs'
+        })
+
+    # Agent 3-6 (MOLEG)
+    for i in range(4):
+        start_idx = kcs_size + i * moleg_chunk_size
+        end_idx = kcs_size + (i + 1) * moleg_chunk_size if i < 3 else len(all_data)
+        chunks_info.append({
+            'agent_type': 'tax_case',
+            'start_idx': start_idx,
+            'end_idx': end_idx,
+            'data_type': 'moleg'
+        })
+
+    # 청크 정보 로깅
+    st.sidebar.info(f"데이터 분할: KCS 2개 청크 + MOLEG 4개 청크 = 총 6개 에이전트")
+    logging.info(f"청크 정보: {chunks_info}")
+
+    result = {
+        "all_data": all_data,
+        "corpus": corpus,
+        "vectorizer": vectorizer,
+        "tfidf_matrix": tfidf_matrix,
+        "data_sources": data_sources,
+        "chunks_info": chunks_info,
+        "kcs_size": kcs_size,
+        "moleg_size": moleg_size
+    }
+
+    logging.info("Character n-gram 벡터화 완료")
     return result
 
-# 추가된 함수: 법원 판례 데이터를 2개의 청크로 분할
-def split_court_cases(court_cases):
-    """관세분야판례423개를 2개의 청크로 분할"""
-    # 데이터 개수
-    total_cases = len(court_cases)
-    chunk_size = max(1, total_cases // 2)  # 최소 1개는 되도록
-    
-    # 2개의 청크로 분할
-    chunks = []
-    for i in range(2):
-        start_idx = i * chunk_size
-        end_idx = (i + 1) * chunk_size if i < 1 else total_cases
-        chunks.append(court_cases[start_idx:end_idx])
-    
-    # 분할 정보 로그
-    st.sidebar.info(f"관세분야판례 분할: 총 {total_cases}건을 {[len(chunk) for chunk in chunks]}건씩 배분")
-    
-    return chunks
 
-def split_tax_cases(tax_cases):
-    """국가법령정보센터_관세판례를 4개의 청크로 분할"""
-    # 데이터 개수
-    total_cases = len(tax_cases)
-    chunk_size = max(1, total_cases // 4)  # 최소 1개는 되도록
-    
-    # 4개의 청크로 분할
-    chunks = []
-    for i in range(4):
-        start_idx = i * chunk_size
-        end_idx = (i + 1) * chunk_size if i < 3 else total_cases
-        chunks.append(tax_cases[start_idx:end_idx])
-    
-    # 분할 정보 로그
-    st.sidebar.info(f"국가법령정보센터 판례 분할: 총 {total_cases}건을 {[len(chunk) for chunk in chunks]}건씩 배분")
-    
-    return chunks
-
-# 관련성 높은 데이터 검색 함수 - 최적화 버전
-def search_relevant_data(data, query, data_type, preprocessed_data, chunk_idx=None, top_n=10, conversation_history=""):
-    """질문과 관련성이 높은 데이터 항목을 검색 (미리 벡터화된 데이터 활용)"""
-    if not data:
-        return []
-
+# 관련성 높은 데이터 검색 함수 - Character n-gram 방식
+def search_relevant_data(query, preprocessed_data, chunk_info, top_n=10, conversation_history=""):
+    """질문과 관련성이 높은 데이터 항목을 검색 (통합 벡터화된 데이터 활용)"""
     # 쿼리 전처리
     enhanced_query = query
     if conversation_history:
         enhanced_query = f"{query} {conversation_history}"
-    
+
     enhanced_query = preprocess_text(enhanced_query)
-    
+
     try:
-        if data_type == "court_case":
-            # 판례 데이터 검색 (특정 청크)
-            vectorizer = preprocessed_data["court_vectorizers"][chunk_idx]
-            tfidf_matrix = preprocessed_data["court_tfidf_matrices"][chunk_idx]
-        else:  # tax_case
-            # 국가법령정보센터 관세판례 검색 (특정 청크)
-            vectorizer = preprocessed_data["tax_vectorizers"][chunk_idx]
-            tfidf_matrix = preprocessed_data["tax_tfidf_matrices"][chunk_idx]
-        
+        # 통합 벡터화된 데이터 사용
+        vectorizer = preprocessed_data["vectorizer"]
+        tfidf_matrix = preprocessed_data["tfidf_matrix"]
+        all_data = preprocessed_data["all_data"]
+
+        # 청크 범위 추출
+        start_idx = chunk_info['start_idx']
+        end_idx = chunk_info['end_idx']
+
+        # 해당 청크의 TF-IDF 행렬만 추출
+        chunk_tfidf_matrix = tfidf_matrix[start_idx:end_idx]
+
         # 쿼리 벡터화
         query_vec = vectorizer.transform([enhanced_query])
-        
+
         # 코사인 유사도 계산
-        similarities = cosine_similarity(query_vec, tfidf_matrix)[0]
-        
+        similarities = cosine_similarity(query_vec, chunk_tfidf_matrix)[0]
+
         # 유사도 기준으로 상위 n개 항목 선택
         top_indices = similarities.argsort()[-top_n:][::-1]
-        
+
         # 유사도가 0보다 큰 항목만 선택
         relevant_data = []
         for idx in top_indices:
             if similarities[idx] > 0:
-                relevant_data.append(data[idx])
-        
+                # 전체 데이터에서의 실제 인덱스
+                actual_idx = start_idx + idx
+                relevant_data.append(all_data[actual_idx])
+
         return relevant_data
     except Exception as e:
         logging.error(f"검색 오류: {str(e)}")
-        # 오류 발생 시 원본 데이터의 일부 반환
-        return data[:min(top_n, len(data))]
+        # 오류 발생 시 청크의 일부 반환
+        try:
+            chunk_data = all_data[start_idx:end_idx]
+            return chunk_data[:min(top_n, len(chunk_data))]
+        except:
+            return []
 
 # 에이전트 프롬프트 정의
 def get_agent_prompt(agent_type):
@@ -349,19 +395,18 @@ def get_agent_prompt(agent_type):
 - 이전 대화에서 언급된 내용이 있다면 그것을 기억하고 관련 내용을 참조하여 응답합니다.
 """
 
-# 에이전트 실행 함수 - 최적화 버전
-def run_agent(agent_type, data, user_query, preprocessed_data, agent_index=None, chunk_idx=None, conversation_history=""):
-    """특정 유형의 에이전트 실행 (최적화된 데이터 사용)"""
+# 에이전트 실행 함수 - Character n-gram 방식
+def run_agent(agent_type, user_query, preprocessed_data, chunk_info, agent_index=None, conversation_history=""):
+    """특정 유형의 에이전트 실행 (통합 벡터화 데이터 사용)"""
     # 프롬프트 생성
     prompt = get_agent_prompt(agent_type)
-    
-    # 질문과 관련성이 높은 데이터 검색 (미리 처리된 데이터 활용)
-    data_type = "court_case" if agent_type == "court_case" else "tax_case"
+
+    # 질문과 관련성이 높은 데이터 검색
     relevant_data = search_relevant_data(
-        data, user_query, data_type, preprocessed_data, 
-        chunk_idx=chunk_idx, conversation_history=conversation_history
+        user_query, preprocessed_data, chunk_info,
+        conversation_history=conversation_history
     )
-    
+
     # 관련 데이터가 없는 경우 처리
     if not relevant_data:
         agent_label = f"Agent {agent_index}" if agent_index else "Head Agent"
@@ -369,19 +414,19 @@ def run_agent(agent_type, data, user_query, preprocessed_data, agent_index=None,
             "agent": agent_label,
             "response": "관련된 데이터를 찾을 수 없습니다."
         }
-    
+
     # 데이터 문자열로 변환
     data_str = json.dumps(relevant_data, ensure_ascii=False, indent=2)
-    
-    # 대화 기록 추가 (에이전트별로 다르게 처리)
+
+    # 대화 기록 추가
     context_str = ""
     if conversation_history:
         context_str = f"\n\n# 이전 대화 기록\n{conversation_history}"
-    
+
     # 전체 프롬프트 구성
     full_prompt = f"{prompt}{context_str}\n\n# 데이터\n{data_str}\n\n# 질문\n{user_query}"
     logging.info(f"Agent {agent_index if agent_index else 'Head'} 실행 시작 (관련 데이터: {len(relevant_data)}건)")
-    
+
     try:
         # Gemini 모델 호출 - gemini-2.0-flash 모델 사용
         response = client.models.generate_content(
@@ -393,7 +438,7 @@ def run_agent(agent_type, data, user_query, preprocessed_data, agent_index=None,
                 top_p=0.8
             )
         )
-        
+
         agent_label = f"Agent {agent_index}" if agent_index else "Head Agent"
         logging.info(f"{agent_label} 응답 생성 완료")
         return {
@@ -408,50 +453,40 @@ def run_agent(agent_type, data, user_query, preprocessed_data, agent_index=None,
             "response": error_msg
         }
 
-# 병렬 에이전트 실행 - 최적화 버전
+# 병렬 에이전트 실행 - Character n-gram 방식
 def run_parallel_agents(court_cases, tax_cases, preprocessed_data, user_query, conversation_history=""):
-    """모든 에이전트를 병렬로 실행하고 결과 반환 (최적화 버전)"""
+    """모든 에이전트를 병렬로 실행하고 결과 반환 (통합 벡터화 버전)"""
     results = []
-    
+
     try:
-        # 미리 분할된 데이터 활용
-        court_cases_chunks = preprocessed_data["court_chunks"]
-        tax_cases_chunks = preprocessed_data["tax_chunks"]
-        
+        # 청크 정보 가져오기
+        chunks_info = preprocessed_data["chunks_info"]
+
         # ThreadPoolExecutor로 병렬 처리
-        with ThreadPoolExecutor(max_workers=2) as executor:  # 에이전트 수 증가로 max_workers 조정
-            # Agent 1-2: 판례 검색 (2개 청크)
-            court_agent_futures = []
-            for i, chunk in enumerate(court_cases_chunks, start=1):
-                court_agent_futures.append(
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            futures = []
+
+            # 6개 에이전트 실행 (Agent 1-2: KCS, Agent 3-6: MOLEG)
+            for i, chunk_info in enumerate(chunks_info, start=1):
+                agent_type = chunk_info['agent_type']
+                futures.append(
                     executor.submit(
-                        run_agent, "court_case", chunk, user_query, 
-                        preprocessed_data, i, i-1, conversation_history
+                        run_agent, agent_type, user_query,
+                        preprocessed_data, chunk_info, i, conversation_history
                     )
                 )
-            
-            # Agent 3-6: 국가법령정보센터 관세판례 검색 (4개 청크)
-            tax_agent_futures = []
-            for i, chunk in enumerate(tax_cases_chunks, start=3):
-                tax_agent_futures.append(
-                    executor.submit(
-                        run_agent, "tax_case", chunk, user_query, 
-                        preprocessed_data, i, i-3, conversation_history
-                    )
-                )
-            
+
             # 결과 수집
-            for future in court_agent_futures:
+            for future in futures:
                 results.append(future.result())
-            for future in tax_agent_futures:
-                results.append(future.result())
+
     except Exception as e:
         logging.error(f"병렬 에이전트 실행 오류: {str(e)}")
         results.append({
             "agent": "Error Agent",
             "response": f"에이전트 실행 중 오류가 발생했습니다: {str(e)}"
         })
-    
+
     return results
 
 # Head Agent를 실행하여 최종 응답 생성

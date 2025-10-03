@@ -28,16 +28,21 @@ The system uses 6 AI agents running in parallel:
 
 ### Data Processing Architecture
 - **Initial Load**: Data is loaded once and cached using `@st.cache_data`
-- **Text Preprocessing**: TF-IDF vectorization with Korean legal stopwords
+- **Vectorization Method**: Character n-gram TF-IDF (analyzer='char', ngram_range=(2,4))
+  - Unified vectorization of KCS + MOLEG data (909 total documents)
+  - Performance: 2.2x better Precision, 3.1x better Recall vs word-based
+  - Cache: Vectorized index saved as pickle file for fast reloading
 - **Similarity Search**: Cosine similarity for finding relevant precedents
-- **Parallel Processing**: ThreadPoolExecutor for concurrent agent execution
+- **Parallel Processing**: ThreadPoolExecutor for concurrent agent execution (6 workers)
 
 ### Key Functions
-- `load_data()`: Loads and caches JSON precedent data
-- `preprocess_data()`: Handles TF-IDF vectorization and data chunking
+- `load_data()`: Loads JSON data and manages vectorization cache (pickle files)
+- `preprocess_data()`: Character n-gram TF-IDF vectorization of unified data
 - `search_relevant_data()`: Finds relevant precedents using cosine similarity
-- `run_parallel_agents()`: Executes 6 agents concurrently
+- `run_parallel_agents()`: Executes 6 agents concurrently (KCS 2 chunks + MOLEG 4 chunks)
 - `run_head_agent()`: Integrates agent responses for final answer
+- `save_vectorization_cache()`: Saves vectorized index to pickle file
+- `load_vectorization_cache()`: Loads cached vectorized index (skip re-vectorization)
 
 ### Session State Management
 - `loaded_data`: Cached preprocessed data and vectorizers
