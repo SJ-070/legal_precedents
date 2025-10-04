@@ -10,7 +10,7 @@ import zipfile
 import tempfile
 from dotenv import load_dotenv
 import pickle
-import hashlib
+import gzip
 
 # --- 환경 변수 및 Gemini API 설정 ---
 load_dotenv()
@@ -131,40 +131,48 @@ def extract_text_from_item(item, data_type):
         return ' '.join(text_parts)
     
 
-# 캐시 키 생성 함수
-def get_cache_key():
-    """데이터 파일의 수정 시간을 기반으로 캐시 키 생성"""
-    try:
-        kcs_mtime = os.path.getmtime("data_kcs.json")
-        moleg_mtime = os.path.getmtime("data_moleg.json")
-        cache_string = f"{kcs_mtime}_{moleg_mtime}"
-        return hashlib.md5(cache_string.encode()).hexdigest()
-    except:
-        return "default"
 
 # 벡터화 결과 저장 함수
-def save_vectorization_cache(preprocessed_data, cache_key):
-    """벡터화 결과를 pickle 파일로 저장"""
-    cache_file = f"vectorization_cache_{cache_key}.pkl"
+def save_vectorization_cache(preprocessed_data):
+    """벡터화 결과를 gzip 압축하여 저장 (로컬 환경 전용)"""
+    cache_file = "vectorization_cache.pkl.gz"
     try:
-        with open(cache_file, 'wb') as f:
+        with gzip.open(cache_file, 'wb', compresslevel=9) as f:
             pickle.dump(preprocessed_data, f)
-        logging.info(f"벡터화 캐시 저장 완료: {cache_file}")
+
+        # 압축 효과 로깅
+        file_size = os.path.getsize(cache_file) / 1024 / 1024  # MB
+        logging.info(f"벡터화 캐시 저장 완료: {cache_file} ({file_size:.2f} MB)")
         return True
-    except Exception as e:
-        logging.error(f"벡터화 캐시 저장 실패: {str(e)}")
+    except (PermissionError, OSError) as e:
+        # Streamlit Cloud는 읽기 전용 - 에러 무시
+        logging.warning(f"캐시 저장 불가 (읽기 전용 환경): {str(e)}")
         return False
 
 # 벡터화 결과 로드 함수
-def load_vectorization_cache(cache_key):
-    """저장된 벡터화 결과를 pickle 파일에서 로드"""
-    cache_file = f"vectorization_cache_{cache_key}.pkl"
+def load_vectorization_cache():
+    """저장된 gzip 압축 벡터화 결과를 로드"""
+    cache_file = "vectorization_cache.pkl.gz"
+
+    # 하위 호환성: 기존 pkl 파일도 지원
+    legacy_cache_file = "vectorization_cache.pkl"
+
     try:
+        # gzip 압축 파일 우선 확인
         if os.path.exists(cache_file):
-            with open(cache_file, 'rb') as f:
+            with gzip.open(cache_file, 'rb') as f:
                 preprocessed_data = pickle.load(f)
-            logging.info(f"벡터화 캐시 로드 완료: {cache_file}")
+            file_size = os.path.getsize(cache_file) / 1024 / 1024  # MB
+            logging.info(f"벡터화 캐시 로드 완료: {cache_file} ({file_size:.2f} MB)")
             return preprocessed_data
+
+        # 기존 pkl 파일 확인 (하위 호환성)
+        elif os.path.exists(legacy_cache_file):
+            with open(legacy_cache_file, 'rb') as f:
+                preprocessed_data = pickle.load(f)
+            logging.info(f"레거시 캐시 로드 완료: {legacy_cache_file} (다음 저장 시 gzip으로 전환)")
+            return preprocessed_data
+
         return None
     except Exception as e:
         logging.error(f"벡터화 캐시 로드 실패: {str(e)}")
@@ -185,11 +193,8 @@ def load_data():
             tax_cases = json.load(f)
         st.sidebar.success(f"MOLEG 판례 데이터 로드 완료: {len(tax_cases)}건")
 
-        # 캐시 키 생성
-        cache_key = get_cache_key()
-
         # 캐시된 벡터화 결과 확인
-        preprocessed_data = load_vectorization_cache(cache_key)
+        preprocessed_data = load_vectorization_cache()
 
         if preprocessed_data is not None:
             st.sidebar.info("저장된 벡터화 인덱스를 로드했습니다.")
@@ -198,7 +203,7 @@ def load_data():
             st.sidebar.info("벡터화 인덱스를 생성 중입니다...")
             preprocessed_data = preprocess_data(court_cases, tax_cases)
             # 벡터화 결과 저장
-            save_vectorization_cache(preprocessed_data, cache_key)
+            save_vectorization_cache(preprocessed_data)
             st.sidebar.success("벡터화 인덱스 생성 및 저장 완료!")
 
         return court_cases, tax_cases, preprocessed_data
@@ -428,9 +433,9 @@ def run_agent(agent_type, user_query, preprocessed_data, chunk_info, agent_index
     logging.info(f"Agent {agent_index if agent_index else 'Head'} 실행 시작 (관련 데이터: {len(relevant_data)}건)")
 
     try:
-        # Gemini 모델 호출 - gemini-2.0-flash 모델 사용
+        # Gemini 모델 호출 - gemini-2.5-flash 모델 사용
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             contents=full_prompt,
             config=types.GenerateContentConfig(
                 temperature=0.1,
