@@ -11,6 +11,7 @@ import tempfile
 from dotenv import load_dotenv
 import pickle
 import gzip
+import time
 
 # --- 환경 변수 및 Gemini API 설정 ---
 load_dotenv()
@@ -317,7 +318,7 @@ def preprocess_data(court_cases, tax_cases):
 
 
 # 관련성 높은 데이터 검색 함수 - Character n-gram 방식
-def search_relevant_data(query, preprocessed_data, chunk_info, top_n=10, conversation_history=""):
+def search_relevant_data(query, preprocessed_data, chunk_info, top_n=5, conversation_history=""):
     """질문과 관련성이 높은 데이터 항목을 검색 (통합 벡터화된 데이터 활용)"""
     # 쿼리 전처리
     enhanced_query = query
@@ -433,7 +434,7 @@ def run_agent(agent_type, user_query, preprocessed_data, chunk_info, agent_index
     logging.info(f"Agent {agent_index if agent_index else 'Head'} 실행 시작 (관련 데이터: {len(relevant_data)}건)")
 
     try:
-        # Gemini 모델 호출 - gemini-2.5-flash 모델 사용
+        # Gemini 모델 호출 - gemini-2.5-flash 모델 사용 (일반 에이전트)
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=full_prompt,
@@ -485,6 +486,10 @@ def run_parallel_agents(court_cases, tax_cases, preprocessed_data, user_query, c
             for future in futures:
                 results.append(future.result())
 
+        # 병렬 에이전트 완료 후 3초 대기 (TPM rate limit 여유 확보)
+        logging.info("병렬 에이전트 완료, Head Agent 호출 전 3초 대기 중...")
+        time.sleep(3)
+
     except Exception as e:
         logging.error(f"병렬 에이전트 실행 오류: {str(e)}")
         results.append({
@@ -494,24 +499,51 @@ def run_parallel_agents(court_cases, tax_cases, preprocessed_data, user_query, c
 
     return results
 
+# Head Agent input 토큰 관리 함수
+def prepare_head_agent_input(agent_responses, max_tokens=200000):
+    """Head Agent 입력 토큰 수 관리 - 초과 시 마지막 에이전트 응답 truncate"""
+    # 간단한 토큰 추정: 한글 1자 약 2.5 토큰
+    total_chars = sum(len(resp['response']) for resp in agent_responses)
+    estimated_tokens = total_chars * 2.5
+
+    logging.info(f"Head Agent 입력 예상 토큰: {int(estimated_tokens):,} (최대: {max_tokens:,})")
+
+    if estimated_tokens > max_tokens:
+        # 초과 토큰 계산
+        excess_tokens = estimated_tokens - max_tokens
+        reduction_chars = int(excess_tokens / 2.5)
+
+        # Agent 6 (마지막) 응답만 truncate
+        original_length = len(agent_responses[-1]['response'])
+        truncated_length = max(1000, original_length - reduction_chars)  # 최소 1000자 보장
+
+        agent_responses[-1]['response'] = agent_responses[-1]['response'][:truncated_length]
+
+        logging.warning(f"Agent 6 응답 truncate: {original_length:,}자 -> {truncated_length:,}자")
+
+    return agent_responses
+
 # Head Agent를 실행하여 최종 응답 생성
 def run_head_agent(agent_responses, user_query, conversation_history=""):
     """각 에이전트의 응답을 통합하여 최종 응답 생성"""
+    # 토큰 관리 (입력 용량 초과 방지)
+    agent_responses = prepare_head_agent_input(agent_responses, max_tokens=200000)
+
     # 응답 데이터 준비
     responses_str = ""
     for resp in agent_responses:
         responses_str += f"\n## {resp['agent']} 응답:\n{resp['response']}\n\n"
-    
+
     # Head Agent 프롬프트 생성
     prompt = get_agent_prompt("head")
-    
+
     # 대화 맥락 추가
     context_str = ""
     if conversation_history:
         context_str = f"\n\n# 이전 대화 기록\n{conversation_history}"
-    
+
     full_prompt = f"{prompt}{context_str}\n\n# 에이전트 응답\n{responses_str}\n\n# 질문\n{user_query}\n\n# 지시사항\n위 에이전트들의 응답을 통합하여 사용자의 질문에 가장 적합한 최종 답변을 작성하세요. 이전 대화 맥락을 고려하여 일관성 있게 응답하세요."
-    
+
     try:
         # Gemini 모델 호출
         response = client.models.generate_content(
@@ -523,8 +555,8 @@ def run_head_agent(agent_responses, user_query, conversation_history=""):
                 top_p=0.8
             )
         )
-        
-        
+
+
         logging.info("Head Agent 응답 생성 완료")
         return {
             "agent": "Head Agent",
