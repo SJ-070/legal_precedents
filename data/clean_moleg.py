@@ -99,10 +99,14 @@ import re
 from datetime import datetime
 import shutil
 from collections import defaultdict, Counter
+from pathlib import Path
+
+# 프로젝트 루트 경로
+PROJECT_ROOT = Path(__file__).parent.parent
 
 class MOLEGDataCleaner:
     def __init__(self):
-        self.moleg_data_file = "data_moleg.json"
+        self.moleg_data_file = str(PROJECT_ROOT / "data_moleg.json")
         self.backup_suffix = f"_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     def create_backup(self, filename):
@@ -486,9 +490,10 @@ class MOLEGDataCleaner:
                 'backup_file': f"{self.moleg_data_file}{self.backup_suffix}"
             }
 
-            with open('moleg_cleaning_report.json', 'w', encoding='utf-8') as f:
+            report_file = PROJECT_ROOT / 'moleg_cleaning_report.json'
+            with open(report_file, 'w', encoding='utf-8') as f:
                 json.dump(report, f, ensure_ascii=False, indent=2)
-            print("✓ Detailed report saved to: moleg_cleaning_report.json")
+            print(f"✓ Detailed report saved to: {report_file}")
 
         else:
             print(f"\n[DRY RUN] Operations completed successfully")

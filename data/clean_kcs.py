@@ -59,10 +59,14 @@ KCS Data Cleaner - Simplified Version
 import json
 from datetime import datetime
 import shutil
+from pathlib import Path
+
+# 프로젝트 루트 경로
+PROJECT_ROOT = Path(__file__).parent.parent
 
 class KCSDataCleaner:
     def __init__(self):
-        self.kcs_data_file = "data_kcs.json"
+        self.kcs_data_file = str(PROJECT_ROOT / "data_kcs.json")
         self.backup_suffix = f"_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     def create_backup(self, filename):
