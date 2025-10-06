@@ -195,10 +195,21 @@ if prompt := st.chat_input("질문을 입력하세요..."):
 with st.sidebar:
     st.subheader("프로젝트 정보")
     st.markdown("""
-    이 챗봇은 관세분야야 판례를 기반으로 답변을 생성합니다.
-    - 7개의 AI 에이전트 활용
-    - 일반 agent : Google Gemini 2.0 Flash 모델 사용
-    - Head agent : Google Gemini 2.5 Flash 모델 사용
-    - 질문과 관련성이 높은 판례 검색 기능
-    - 관련 자료 기반 정확한 응답 생성
+    이 챗봇은 관세법 판례를 기반으로 답변을 생성합니다.
+
+    **데이터 소스**
+    - KCS 판례: 423건
+    - MOLEG 판례: 486건
+    - 총 909건의 판례 데이터
+
+    **시스템 구조**
+    - 6개의 AI 에이전트 병렬 실행
+    - Google Gemini 2.5 Flash 모델 사용
+    - Character n-gram TF-IDF 검색
+    - Multi-Agent 통합 답변 생성
+
+    **주요 장점**
+    - 완전 무료 (Gemini API 무료 티어)
+    - 일반 노트북/무료 Streamlit Cloud 구동
+    - 빠른 응답 (검색 0.05초, 답변 5-10초)
     """)
