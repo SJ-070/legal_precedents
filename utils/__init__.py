@@ -33,6 +33,13 @@ from .agent import (
     run_head_agent
 )
 
+# 판례 검색
+from .precedent_search import (
+    search_precedent,
+    format_precedent_title,
+    format_precedent_summary
+)
+
 __all__ = [
     # 설정
     'client', 'GOOGLE_API_KEY',
@@ -52,5 +59,8 @@ __all__ = [
 
     # 에이전트
     'get_agent_prompt', 'run_agent', 'run_parallel_agents',
-    'prepare_head_agent_input', 'run_head_agent'
+    'prepare_head_agent_input', 'run_head_agent',
+
+    # 판례 검색
+    'search_precedent', 'format_precedent_title', 'format_precedent_summary'
 ]
