@@ -105,8 +105,10 @@ def run_agent(agent_type, user_query, preprocessed_data, chunk_info, agent_index
 
 
 def run_parallel_agents(court_cases, tax_cases, preprocessed_data, user_query, conversation_history=""):
-    """모든 에이전트를 병렬로 실행하고 결과 반환 (통합 벡터화 버전)"""
-    results = []
+    """모든 에이전트를 병렬로 실행하고 완료되는 즉시 결과 yield (통합 벡터화 버전)"""
+    from concurrent.futures import as_completed
+
+    results = [None] * 6  # 순서 보장을 위한 고정 크기 리스트
 
     try:
         # 청크 정보 가져오기
@@ -114,21 +116,26 @@ def run_parallel_agents(court_cases, tax_cases, preprocessed_data, user_query, c
 
         # ThreadPoolExecutor로 병렬 처리
         with ThreadPoolExecutor(max_workers=6) as executor:
-            futures = []
+            # future -> index 매핑
+            future_to_index = {}
 
             # 6개 에이전트 실행 (Agent 1-2: KCS, Agent 3-6: MOLEG)
             for i, chunk_info in enumerate(chunks_info, start=1):
                 agent_type = chunk_info['agent_type']
-                futures.append(
-                    executor.submit(
-                        run_agent, agent_type, user_query,
-                        preprocessed_data, chunk_info, i, conversation_history
-                    )
+                future = executor.submit(
+                    run_agent, agent_type, user_query,
+                    preprocessed_data, chunk_info, i, conversation_history
                 )
+                future_to_index[future] = i - 1  # 0-based index 저장
 
-            # 결과 수집
-            for future in futures:
-                results.append(future.result())
+            # 완료되는 순서대로 처리하며 즉시 yield
+            for future in as_completed(future_to_index.keys()):
+                index = future_to_index[future]
+                result = future.result()
+                results[index] = result
+
+                # 완료된 결과 즉시 반환
+                yield result
 
         # 병렬 에이전트 완료 후 3초 대기 (TPM rate limit 여유 확보)
         logging.info("병렬 에이전트 완료, Head Agent 호출 전 3초 대기 중...")
@@ -136,12 +143,10 @@ def run_parallel_agents(court_cases, tax_cases, preprocessed_data, user_query, c
 
     except Exception as e:
         logging.error(f"병렬 에이전트 실행 오류: {str(e)}")
-        results.append({
+        yield {
             "agent": "Error Agent",
             "response": f"에이전트 실행 중 오류가 발생했습니다: {str(e)}"
-        })
-
-    return results
+        }
 
 
 def prepare_head_agent_input(agent_responses, max_tokens=200000):

@@ -113,80 +113,102 @@ if prompt := st.chat_input("질문을 입력하세요..."):
     
     # 응답 생성
     with st.chat_message("assistant"):
-        with st.spinner("답변 생성 중..."):
-            try:
-                # 저장된 데이터 사용
-                court_cases = st.session_state.loaded_data["court_cases"]
-                tax_cases = st.session_state.loaded_data["tax_cases"]
-                preprocessed_data = st.session_state.loaded_data["preprocessed_data"]
-                
-                # 대화 맥락 가져오기
-                conversation_history = ""
-                if st.session_state.context_enabled:
-                    conversation_history = get_conversation_history(
-                        max_messages=st.session_state.get('max_history', 5)
-                    )
-                
-                # 프로그레스 바 표시
-                progress_text = st.empty()
-                progress_bar = st.progress(0)
-                
-                # 단계별 진행 상태 표시
-                progress_text.text("1/3 에이전트 실행 중...")
-                progress_bar.progress(33)
-                
-                # 에이전트 실행 (대화 기록 전달 및 전처리된 데이터 활용)
-                agent_responses = run_parallel_agents(
-                    court_cases, tax_cases, preprocessed_data, prompt, conversation_history
-                )
-                
-                progress_text.text("2/3 결과 통합 중...")
-                progress_bar.progress(66)
-                
-                # Head Agent로 최종 응답 생성 (대화 기록 전달)
-                
-                head_response = run_head_agent(
-                    agent_responses, prompt, conversation_history
-                )
-                
-                # 응답 텍스트 추출 (수정된 함수 반환값에 맞춤)
-                if isinstance(head_response, dict):
-                    final_response = head_response.get("response", "응답을 생성할 수 없습니다.")
-                    already_displayed = head_response.get("already_displayed", False)
-                else:
-                    # 이전 버전 호환성을 위한 처리
-                    final_response = head_response
-                    already_displayed = False
-                
-                progress_text.text("3/3 답변 생성 완료")
-                progress_bar.progress(100)
-                time.sleep(0.5)  # 완료 상태 잠시 표시
-                
-                # 프로그레스 바 제거
-                progress_text.empty()
-                progress_bar.empty()
-                
-                # 이미 스트리밍으로 표시되지 않은 경우에만 최종 응답 표시
-                if not already_displayed:
-                    st.markdown(final_response)
+        try:
+            # 저장된 데이터 사용
+            court_cases = st.session_state.loaded_data["court_cases"]
+            tax_cases = st.session_state.loaded_data["tax_cases"]
+            preprocessed_data = st.session_state.loaded_data["preprocessed_data"]
 
-                # 각 에이전트의 응답을 expander로 표시
-                with st.expander("🤖 각 에이전트 답변 보기"):
-                    for i, agent_resp in enumerate(agent_responses):
-                        st.subheader(f"📋 {agent_resp['agent']}")
-                        st.markdown(agent_resp['response'])
-                        if i < len(agent_responses) - 1:  # 마지막 에이전트가 아니면 구분선 추가
-                            st.divider()
-                
-                # 응답 저장
-                st.session_state.messages.append({"role": "assistant", "content": final_response})
-                
-            except Exception as e:
-                st.error(f"오류가 발생했습니다: {str(e)}")
-                logging.error(f"전체 처리 오류: {str(e)}")
-                # 오류 메시지도 저장
-                error_message = f"오류가 발생했습니다: {str(e)}"
-                st.session_state.messages.append({"role": "assistant", "content": error_message})
+            # 대화 맥락 가져오기
+            conversation_history = ""
+            if st.session_state.context_enabled:
+                conversation_history = get_conversation_history(
+                    max_messages=st.session_state.get('max_history', 5)
+                )
+
+            # === [섹션 1] 실시간 진행 상황 표시 ===
+            progress_display = st.empty()
+
+            # === [섹션 2] 에이전트 답변 동적 표시 (st.status) ===
+            agent_status = st.status("🤖 에이전트 답변 생성 중...", expanded=True, state='running')
+
+            # 에이전트 컨테이너 6개 미리 생성
+            agent_containers = []
+            with agent_status:
+                for i in range(6):
+                    agent_containers.append(st.empty())
+
+            # === [섹션 3] 최종 답변 (예약) ===
+            final_answer_section = st.empty()
+
+            # === 에이전트 병렬 실행 및 실시간 UI 업데이트 ===
+            progress_display.markdown("⏳ 에이전트 실행 중...")
+
+            # 제너레이터로 실시간 처리
+            agent_responses = []
+            completed_count = 0
+
+            for result in run_parallel_agents(
+                court_cases, tax_cases, preprocessed_data, prompt, conversation_history
+            ):
+                # 에이전트 인덱스 추출 (예: "Agent 3" -> 2)
+                agent_num = int(result['agent'].split()[-1]) - 1
+
+                # 즉시 UI 업데이트
+                with agent_containers[agent_num].container():
+                    st.subheader(f"📋 {result['agent']}")
+                    st.markdown(result['response'])
+                    if agent_num < 5:
+                        st.divider()
+
+                completed_count += 1
+                progress_display.markdown(f"✓ {result['agent']} 완료 ({completed_count}/6)")
+
+                agent_responses.append(result)
+
+            # 순서대로 정렬 (완료 순서가 다를 수 있으므로)
+            agent_responses.sort(key=lambda x: int(x['agent'].split()[-1]))
+
+            # 모든 에이전트 완료
+            progress_display.markdown("✓ 모든 에이전트 완료 | ⏳ 최종 답변 통합 중...")
+
+            # === Head Agent로 최종 응답 생성 ===
+            head_response = run_head_agent(
+                agent_responses, prompt, conversation_history
+            )
+
+            # 응답 텍스트 추출
+            if isinstance(head_response, dict):
+                final_response = head_response.get("response", "응답을 생성할 수 없습니다.")
+            else:
+                final_response = head_response
+
+            # === [섹션 2] 자동으로 닫기 ===
+            agent_status.update(
+                label="🤖 각 에이전트 답변 보기",
+                state="complete",
+                expanded=False
+            )
+
+            # === [섹션 1] 완료 상태 ===
+            progress_display.markdown("✅ 답변 생성 완료!")
+            time.sleep(0.3)
+            progress_display.empty()
+
+            # === [섹션 3] 최종 답변 표시 ===
+            with final_answer_section.container():
+                st.markdown("### 📌 최종 답변")
+                st.markdown(final_response)
+
+            # 응답 저장
+            st.session_state.messages.append({"role": "assistant", "content": final_response})
+
+        except Exception as e:
+            st.error(f"오류가 발생했습니다: {str(e)}")
+            logging.error(f"전체 처리 오류: {str(e)}")
+            # 오류 메시지도 저장
+            error_message = f"오류가 발생했습니다: {str(e)}"
+            st.session_state.messages.append({"role": "assistant", "content": error_message})
     
     # 처리 완료
     st.session_state.processing = False
