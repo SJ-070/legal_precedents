@@ -268,30 +268,6 @@ st.session_state.messages.append({
 
 ---
 
-### 전체 처리 시간 요약
-
-**최초 실행 (캐시 없음)**
-- 0초: 앱 시작
-- 0초: 데이터 로드 (909건)
-- 0초: Character n-gram 벡터화 시작
-- 80초: 벡터화 완료, GZIP 압축 pickle 캐시 저장
-- 80초: 챗봇 준비 완료
-
-**2회차 이후 (캐시 있음)**
-- 0초: 앱 시작
-- 0.5초: GZIP 압축 pickle 캐시 로드
-- 0.5초: 챗봇 준비 완료
-
-**질문-답변 과정**
-- T+0초: 사용자 질문 입력
-- T+0초: 6개 에이전트 병렬 실행 시작
-  - 각 에이전트: 쿼리 벡터화 (0.1초) + 유사도 계산 (0.05초) + Gemini API (3-5초)
-- T+5초: 모든 에이전트 응답 수집
-- T+5초: Head Agent 실행 (Gemini 2.5 Flash, 3-5초)
-- T+10초: 최종 답변 화면 표시
-
----
-
 ### 핵심 성능 최적화 요소
 
 1. **Character n-gram 벡터화**
@@ -550,3 +526,190 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+---
+
+## 데이터 로드 순서
+
+스트림릿 앱 실행 시 법령 데이터는 다음 순서로 로드됩니다:
+
+### 1단계: 앱 시작 시 데이터 파일 존재 여부 확인
+
+**위치**: [main.py:83-96](main.py#L83-L96)
+
+```python
+# 데이터 파일 존재 여부만 확인 (아직 로드 안 함)
+has_data_files = check_data_files()  # data_kcs.json, data_moleg.json 존재 확인
+
+# 세션 상태에 데이터가 없는지 확인
+if not st.session_state.loaded_data["court_cases"]:
+    # 비어있으면 load_data() 호출
+    court_cases, tax_cases, preprocessed_data = load_data()
+    st.session_state.loaded_data = {...}  # 메모리에 저장
+```
+
+**결과**: 첫 실행 시 `load_data()` 호출, 이후엔 메모리(앱 캐시)에서 재사용
+
+---
+
+### 2단계: `load_data()` 함수 실행
+
+**위치**: [utils/data_loader.py:104-142](utils/data_loader.py#L104-L142)
+
+#### 2-1. JSON 파일 로드 (무조건 실행)
+
+```python
+# KCS 판례 로드
+with open("data_kcs.json", "r", encoding="utf-8") as f:
+    court_cases = json.load(f)  # 423건
+st.sidebar.success(f"KCS 판례 데이터 로드 완료: {len(court_cases)}건")
+
+# MOLEG 판례 로드
+with open("data_moleg.json", "r", encoding="utf-8") as f:
+    tax_cases = json.load(f)  # 486건
+st.sidebar.success(f"MOLEG 판례 데이터 로드 완료: {len(tax_cases)}건")
+```
+
+**결과**: `court_cases` (423건), `tax_cases` (486건) 메모리 적재
+
+#### 2-2. gzip 캐시 확인
+
+```python
+# gzip 캐시 로드 시도
+preprocessed_data = load_vectorization_cache()
+```
+
+**`load_vectorization_cache()` 내부** ([utils/data_loader.py:75-101](utils/data_loader.py#L75-L101)):
+
+```python
+# vectorization_cache.pkl.gz 파일 존재 확인
+if os.path.exists("vectorization_cache.pkl.gz"):
+    with gzip.open(cache_file, 'rb') as f:
+        preprocessed_data = pickle.load(f)
+    return preprocessed_data  # 벡터화 결과 반환
+else:
+    return None  # 캐시 없음
+```
+
+#### 2-3. 캐시 없으면 벡터화 수행
+
+```python
+if preprocessed_data is not None:
+    # 캐시가 있으면
+    st.sidebar.info("저장된 벡터화 인덱스를 로드했습니다.")
+else:
+    # 캐시가 없으면
+    st.sidebar.info("벡터화 인덱스를 생성 중입니다...")
+    from .vectorizer import preprocess_data
+
+    # TF-IDF 벡터화 수행 (약 10초 소요)
+    preprocessed_data = preprocess_data(court_cases, tax_cases)
+
+    # gzip으로 저장
+    save_vectorization_cache(preprocessed_data)
+    st.sidebar.success("벡터화 인덱스 생성 및 저장 완료!")
+```
+
+---
+
+### 3단계: 데이터 반환 및 세션 상태 저장
+
+```python
+return court_cases, tax_cases, preprocessed_data
+```
+
+- `court_cases`: JSON에서 읽은 KCS 판례 (423건)
+- `tax_cases`: JSON에서 읽은 MOLEG 판례 (486건)
+- `preprocessed_data`: gzip 캐시 또는 새로 생성한 벡터화 결과
+
+이 3개 값이 `st.session_state.loaded_data`에 저장됨
+
+---
+
+### 실행 시나리오별 흐름
+
+#### 시나리오 1: 최초 실행 (캐시 없음)
+
+```
+앱 시작
+  ↓
+세션 상태 확인 (비어있음)
+  ↓
+load_data() 호출
+  ↓
+JSON 로드 (data_kcs.json, data_moleg.json)  ← 약 2초
+  ↓
+gzip 캐시 확인 (없음)
+  ↓
+TF-IDF 벡터화 수행  ← 약 10초
+  ↓
+gzip으로 저장 (vectorization_cache.pkl.gz)
+  ↓
+세션 상태에 저장
+  ↓
+앱 사용 가능
+```
+
+**총 소요 시간**: 약 12초
+
+#### 시나리오 2: 두 번째 실행 (캐시 있음)
+
+```
+앱 시작
+  ↓
+세션 상태 확인 (비어있음)
+  ↓
+load_data() 호출
+  ↓
+JSON 로드 (data_kcs.json, data_moleg.json)  ← 약 2초
+  ↓
+gzip 캐시 확인 (있음!)
+  ↓
+gzip 로드  ← 약 1초
+  ↓
+세션 상태에 저장
+  ↓
+앱 사용 가능
+```
+
+**총 소요 시간**: 약 3초
+
+#### 시나리오 3: 페이지 새로고침 (세션 유지)
+
+```
+앱 재실행
+  ↓
+세션 상태 확인 (데이터 있음!)
+  ↓
+기존 데이터 재사용  ← 0초
+  ↓
+앱 즉시 사용 가능
+```
+
+**총 소요 시간**: 0초 (Streamlit `@st.cache_data` 덕분)
+
+---
+
+### 핵심 포인트
+
+1. **JSON은 항상 읽습니다** (캐시 유무와 관계없이)
+2. **gzip 캐시는 벡터화만 생략**합니다 (TF-IDF 연산 10초 절약)
+3. **세션 상태가 가장 빠릅니다** (메모리에 있으면 아무것도 안 읽음)
+
+**현재 구조에서 JSON을 생략할 수 없는 이유**:
+- `load_data()`가 `court_cases`와 `tax_cases`를 별도로 반환해야 함
+- gzip에는 `all_data`(통합)만 있고, 분리된 원본은 없음
+- 따라서 JSON을 읽지 않으면 `court_cases`, `tax_cases` 반환 불가
+
+---
+
+### 세 가지 데이터 비교
+
+| 항목 | 원본 JSON | gzip 캐시 | 앱 캐시 (세션 상태) |
+|------|----------|----------|---------|
+| **저장 위치** | 디스크 | 디스크 | 메모리 |
+| **판례 원본** | ✅ 있음 (분리) | ✅ 있음 (`all_data` 통합) | ✅ 있음 (분리 + 통합) |
+| **벡터 인덱스** | ❌ 없음 | ✅ 있음 | ✅ 있음 |
+| **생성 시간** | - | 약 10초 | 0초 (이미 있으면) |
+| **유지 기간** | 영구 | 영구 | 세션 동안만 |
+| **용도** | 원본 데이터 제공 | 벡터화 재계산 생략 | 페이지 새로고침 시 즉시 사용 |
