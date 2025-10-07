@@ -268,15 +268,15 @@ def calculate_precedent_score(query: str, precedent_data: Dict[str, Any], source
     # 필드별 점수 및 가중치 저장
     field_scores = {}
 
-    # 사건번호/판례번호 매칭 (가중치 60%)
+    # 사건번호/판례번호 매칭 (가중치 80%)
     if source == 'kcs' and '사건번호' in precedent_data:
         score = match_case_number_score(query, precedent_data['사건번호'])
         if score > 0:
-            field_scores['case_number'] = {'score': score, 'weight': 0.6}
+            field_scores['case_number'] = {'score': score, 'weight': 0.8}
     elif source == 'moleg' and '판례번호' in precedent_data:
         score = match_precedent_number_score(query, precedent_data['판례번호'])
         if score > 0:
-            field_scores['precedent_number'] = {'score': score, 'weight': 0.6}
+            field_scores['precedent_number'] = {'score': score, 'weight': 0.8}
 
     # 날짜 매칭 (가중치 20%)
     detected_dates = detect_date(query)
@@ -289,22 +289,6 @@ def calculate_precedent_score(query: str, precedent_data: Dict[str, Any], source
                 max_date_score = max(max_date_score, score)
             if max_date_score > 0:
                 field_scores['date'] = {'score': max_date_score, 'weight': 0.2}
-
-    # 법원명 매칭 (MOLEG만, 가중치 20%)
-    if source == 'moleg' and '법원명' in precedent_data:
-        court_info = detect_court(query)
-        if court_info:
-            score = match_court_score(query, precedent_data['법원명'])
-            if score > 0:
-                field_scores['court'] = {'score': score, 'weight': 0.2}
-
-    # 처분청 매칭 (KCS만, 가중치 20%)
-    if source == 'kcs' and '처분청' in precedent_data:
-        customs_info = detect_customs(query)
-        if customs_info:
-            score = match_customs_score(query, precedent_data['처분청'])
-            if score > 0:
-                field_scores['customs'] = {'score': score, 'weight': 0.2}
 
     # 점수 계산 로직
     if not field_scores:
@@ -325,12 +309,10 @@ def calculate_precedent_score(query: str, precedent_data: Dict[str, Any], source
     else:
         base_score = 0.0
 
-    # 복수 필드 매칭 보너스
+    # 복수 필드 매칭 보너스 (날짜 + 사건번호/판례번호 동시 매칭 시)
     multi_field_bonus = 0.0
     if matched_fields_count == 2:
         multi_field_bonus = 5.0
-    elif matched_fields_count >= 3:
-        multi_field_bonus = 10.0
 
     # 최종 점수 = 기본 점수 + 매칭 보너스
     final_score = base_score + multi_field_bonus
@@ -352,8 +334,7 @@ def get_matched_fields(query: str, precedent_data: Dict[str, Any], source: str) 
         매칭된 필드와 점수 딕셔너리
         {
             'case_number': 100.0,
-            'date': 90.0,
-            'court': 95.0
+            'date': 90.0
         }
     """
     matched_fields = {}
@@ -379,21 +360,5 @@ def get_matched_fields(query: str, precedent_data: Dict[str, Any], source: str) 
                 max_date_score = max(max_date_score, score)
             if max_date_score > 0:
                 matched_fields['선고일자'] = max_date_score
-
-    # 법원명 매칭
-    if source == 'moleg' and '법원명' in precedent_data:
-        court_info = detect_court(query)
-        if court_info:
-            score = match_court_score(query, precedent_data['법원명'])
-            if score > 0:
-                matched_fields['법원명'] = score
-
-    # 처분청 매칭
-    if source == 'kcs' and '처분청' in precedent_data:
-        customs_info = detect_customs(query)
-        if customs_info:
-            score = match_customs_score(query, precedent_data['처분청'])
-            if score > 0:
-                matched_fields['처분청'] = score
 
     return matched_fields

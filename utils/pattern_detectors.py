@@ -10,14 +10,14 @@ from datetime import datetime
 
 # ==================== 정규식 패턴 정의 ====================
 
-# 사건번호 패턴 (예: 대전지법2023구합208027, 2023구합208027)
-CASE_NUMBER_PATTERN = r'([가-힣]+(?:지법|고법|대법원))?(\d{4})([가-힣]+)(\d+)'
+# 사건번호 패턴 (예: 대전지법2023구합208027, 2023구합208027, 93구7730)
+CASE_NUMBER_PATTERN = r'([가-힣]+(?:지법|고법|대법원))?(\d{2,4})([가-힣]+)(\d+)'
 
-# 판례번호 패턴 (예: [대법원 2025. 2. 13. 선고 2023도1907 판결])
-PRECEDENT_NUMBER_FULL_PATTERN = r'\[([가-힣]+)\s+(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\.\s*선고\s+(\d{4}[가-힣]+\d+)\s*판결\]'
+# 판례번호 패턴 (예: [대법원 2025. 2. 13. 선고 2023도1907 판결], [부산고법 1994. 9. 1. 선고 93구7730 판결])
+PRECEDENT_NUMBER_FULL_PATTERN = r'\[([가-힣]+)\s+(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\.\s*선고\s+(\d{2,4}[가-힣]+\d+)\s*판결\]'
 
-# 간소화된 사건번호 패턴 (예: 2023도1907)
-SIMPLE_CASE_PATTERN = r'(\d{4})([가-힣]+)(\d+)'
+# 간소화된 사건번호 패턴 (예: 2023도1907, 93구7730)
+SIMPLE_CASE_PATTERN = r'(\d{2,4})([가-힣]+)(\d+)'
 
 # 날짜 패턴들
 DATE_PATTERNS = [
@@ -81,6 +81,39 @@ CUSTOMS_ALIASES = {
 }
 
 
+# ==================== 연도 정규화 함수 ====================
+
+def normalize_year(year_str: str) -> str:
+    """
+    2자리 또는 4자리 연도를 4자리로 정규화
+
+    Args:
+        year_str: 연도 문자열 ("93", "2023" 등)
+
+    Returns:
+        4자리 연도 문자열
+
+    Examples:
+        "93" → "1993"
+        "00" → "2000"
+        "24" → "2024"
+        "2023" → "2023"
+    """
+    if len(year_str) == 4:
+        return year_str
+
+    if len(year_str) == 2:
+        year_int = int(year_str)
+        # 90-99 → 1990-1999
+        if year_int >= 90:
+            return f"19{year_str}"
+        # 00-89 → 2000-2089
+        else:
+            return f"20{year_str}"
+
+    return year_str
+
+
 # ==================== 탐지 함수들 ====================
 
 def detect_case_number(query: str) -> Optional[Dict[str, str]]:
@@ -103,12 +136,13 @@ def detect_case_number(query: str) -> Optional[Dict[str, str]]:
     match = re.search(CASE_NUMBER_PATTERN, query)
     if match:
         court, year, case_type, number = match.groups()
+        normalized_year = normalize_year(year)
         return {
             'court': court or '',
-            'year': year,
+            'year': normalized_year,
             'type': case_type,
             'number': number,
-            'full': f"{court or ''}{year}{case_type}{number}"
+            'full': f"{court or ''}{normalized_year}{case_type}{number}"
         }
     return None
 
@@ -133,18 +167,28 @@ def detect_precedent_number(query: str) -> Optional[Dict[str, str]]:
     match = re.search(PRECEDENT_NUMBER_FULL_PATTERN, query)
     if match:
         court, year, month, day, case_id = match.groups()
+        # case_id에서 연도 추출하여 정규화
+        case_year_match = re.match(r'(\d{2,4})', case_id)
+        if case_year_match:
+            case_year = normalize_year(case_year_match.group(1))
+            # case_id의 연도 부분을 정규화된 연도로 교체
+            normalized_case_id = case_id.replace(case_year_match.group(1), case_year, 1)
+        else:
+            normalized_case_id = case_id
+
         return {
             'court': court,
             'date': f"{year}-{month.zfill(2)}-{day.zfill(2)}",
-            'case_id': case_id,
+            'case_id': normalized_case_id,
             'full': match.group(0)
         }
 
-    # 간소화된 사건번호 패턴 시도 (예: 2023도1907)
+    # 간소화된 사건번호 패턴 시도 (예: 2023도1907, 93구7730)
     match = re.search(SIMPLE_CASE_PATTERN, query)
     if match:
         year, case_type, number = match.groups()
-        case_id = f"{year}{case_type}{number}"
+        normalized_year = normalize_year(year)
+        case_id = f"{normalized_year}{case_type}{number}"
         return {
             'court': '',
             'date': '',
