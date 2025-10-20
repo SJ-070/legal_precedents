@@ -4,7 +4,7 @@ Legal Precedents Chatbot Utilities
 """
 
 # 설정
-from .config import client, GOOGLE_API_KEY
+from .config import initialize_client
 
 # 대화 관리
 from .conversation import get_conversation_history
@@ -42,7 +42,7 @@ from .precedent_search import (
 
 __all__ = [
     # 설정
-    'client', 'GOOGLE_API_KEY',
+    'initialize_client',
 
     # 대화 관리
     'get_conversation_history',

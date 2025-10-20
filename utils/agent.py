@@ -8,7 +8,6 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from google.genai import types
-from .config import client
 from .vectorizer import search_relevant_data
 
 
@@ -50,7 +49,7 @@ def get_agent_prompt(agent_type):
 """
 
 
-def run_agent(agent_type, user_query, preprocessed_data, chunk_info, agent_index=None, conversation_history=""):
+def run_agent(client, agent_type, user_query, preprocessed_data, chunk_info, agent_index=None, conversation_history=""):
     """특정 유형의 에이전트 실행 (통합 벡터화 데이터 사용)"""
     # 프롬프트 생성
     prompt = get_agent_prompt(agent_type)
@@ -108,7 +107,7 @@ def run_agent(agent_type, user_query, preprocessed_data, chunk_info, agent_index
         }
 
 
-def run_parallel_agents(court_cases, tax_cases, preprocessed_data, user_query, conversation_history=""):
+def run_parallel_agents(client, court_cases, tax_cases, preprocessed_data, user_query, conversation_history=""):
     """모든 에이전트를 병렬로 실행하고 완료되는 즉시 결과 yield (통합 벡터화 버전)"""
     from concurrent.futures import as_completed
 
@@ -127,7 +126,7 @@ def run_parallel_agents(court_cases, tax_cases, preprocessed_data, user_query, c
             for i, chunk_info in enumerate(chunks_info, start=1):
                 agent_type = chunk_info['agent_type']
                 future = executor.submit(
-                    run_agent, agent_type, user_query,
+                    run_agent, client, agent_type, user_query,
                     preprocessed_data, chunk_info, i, conversation_history
                 )
                 future_to_index[future] = i - 1  # 0-based index 저장
@@ -177,7 +176,7 @@ def prepare_head_agent_input(agent_responses, max_tokens=200000):
     return agent_responses
 
 
-def run_head_agent(agent_responses, user_query, conversation_history=""):
+def run_head_agent(client, agent_responses, user_query, conversation_history=""):
     """각 에이전트의 응답을 통합하여 최종 응답 생성"""
     # 토큰 관리 (입력 용량 초과 방지)
     agent_responses = prepare_head_agent_input(agent_responses, max_tokens=200000)

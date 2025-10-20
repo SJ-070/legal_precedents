@@ -3,7 +3,6 @@ import os
 import time
 import logging
 import json
-from dotenv import load_dotenv
 from utils import (
     initialize_client,
     check_data_files,
@@ -16,17 +15,12 @@ from utils import (
     format_precedent_summary
 )
 
-# --- 환경 변수 및 Gemini API 설정 ---
-load_dotenv()
-GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
-client = initialize_client(GOOGLE_API_KEY)
-
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # 페이지 설정
 st.set_page_config(
-    page_title="관세법 판례 기반 챗봇",
+    page_title="관세법 판례 기반 챗봇 (API Key 입력)",
     page_icon="⚖️",
     layout="wide",
 )
@@ -34,6 +28,7 @@ st.set_page_config(
 # 애플리케이션 제목
 st.title("⚖️ 관세법 판례 기반 챗봇")
 st.markdown("관세법 판례 정보를 활용한 AI 기반 법률 챗봇입니다.")
+st.info("💡 사이드바에서 Google API Key를 입력해주세요.")
 
 # 탭 생성
 tab1, tab2 = st.tabs(["💬 챗봇 모드", "🔍 판례 검색"])
@@ -60,13 +55,38 @@ if "loaded_data" not in st.session_state:
         "preprocessed_data": {}
     }
 
+# API Key 초기화
+if "client" not in st.session_state:
+    st.session_state.client = None
+
 with st.sidebar:
-    st.header("설정")
-    
-    
+    st.header("API 설정")
+
+    # API Key 입력
+    api_key_input = st.text_input(
+        "Google API Key",
+        type="password",
+        help="Google AI Studio에서 발급받은 API Key를 입력하세요.",
+        placeholder="AIza..."
+    )
+
+    if api_key_input:
+        try:
+            # API Key로 client 초기화
+            st.session_state.client = initialize_client(api_key_input)
+            st.success("✅ API Key가 설정되었습니다.")
+        except Exception as e:
+            st.error(f"❌ API Key 설정 실패: {str(e)}")
+            st.session_state.client = None
+    else:
+        st.warning("⚠️ API Key를 입력해주세요.")
+        st.session_state.client = None
+
+    st.markdown("---")
+
     # 대화 관리 옵션들
     st.header("대화 관리")
-    
+
     # 대화 맥락 활용 옵션
     context_enabled = st.checkbox("이전 대화 맥락 활용", value=st.session_state.context_enabled)
     if context_enabled != st.session_state.context_enabled:
@@ -75,12 +95,12 @@ with st.sidebar:
             st.success("이전 대화 맥락을 활용합니다.")
         else:
             st.info("각 질문을 독립적으로 처리합니다.")
-    
+
     # 최근 대화 유지 수 선택
     if st.session_state.context_enabled:
         max_history = st.slider("최근 대화 유지 수", min_value=2, max_value=10, value=5)
         st.session_state.max_history = max_history
-    
+
     # 새로운 대화 시작 버튼
     if st.button("새로운 대화 시작하기"):
         # 메시지 기록 및 에이전트 답변 초기화 (데이터는 유지)
@@ -107,148 +127,158 @@ else:
 
 # ==================== 탭 1: 챗봇 모드 ====================
 with tab1:
-    # 저장된 메시지 및 에이전트 답변 표시
-    assistant_count = 0  # assistant 메시지 카운터
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            if message["role"] == "assistant":
-                # assistant 메시지 카운터를 사용하여 올바른 에이전트 답변 가져오기
-                if assistant_count < len(st.session_state.agent_responses_history):
-                    agent_responses = st.session_state.agent_responses_history[assistant_count]
-                    if agent_responses:
-                        # 에이전트 답변 표시 (expander)
-                        with st.status("🤖 각 에이전트 답변 보기", state="complete", expanded=False):
-                            for resp in agent_responses:
-                                st.subheader(f"📋 {resp['agent']}")
-                                st.markdown(resp['response'])
-                                if resp != agent_responses[-1]:
-                                    st.divider()
+    # API Key 미입력 시 경고
+    if not st.session_state.client:
+        st.warning("⚠️ 사이드바에서 Google API Key를 입력해야 챗봇을 사용할 수 있습니다.")
+        st.info("""
+        **Google API Key 발급 방법:**
+        1. [Google AI Studio](https://aistudio.google.com/apikey)에 접속
+        2. 'Create API Key' 클릭
+        3. 생성된 API Key를 복사하여 사이드바에 입력
+        """)
+    else:
+        # 저장된 메시지 및 에이전트 답변 표시
+        assistant_count = 0  # assistant 메시지 카운터
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                if message["role"] == "assistant":
+                    # assistant 메시지 카운터를 사용하여 올바른 에이전트 답변 가져오기
+                    if assistant_count < len(st.session_state.agent_responses_history):
+                        agent_responses = st.session_state.agent_responses_history[assistant_count]
+                        if agent_responses:
+                            # 에이전트 답변 표시 (expander)
+                            with st.status("🤖 각 에이전트 답변 보기", state="complete", expanded=False):
+                                for resp in agent_responses:
+                                    st.subheader(f"📋 {resp['agent']}")
+                                    st.markdown(resp['response'])
+                                    if resp != agent_responses[-1]:
+                                        st.divider()
 
-                        st.divider()
-
-                # 최종 답변 표시
-                st.markdown("### 📌 최종 답변")
-                st.markdown(message["content"])
-
-                # assistant 카운터 증가
-                assistant_count += 1
-            else:
-                st.markdown(message["content"])
-
-    # 사용자 입력 처리
-    if prompt := st.chat_input("질문을 입력하세요..."):
-
-        # 사용자 메시지 표시
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        # 처리 시작
-        st.session_state.processing = True
-
-        # 응답 생성
-        with st.chat_message("assistant"):
-            try:
-                # 저장된 데이터 사용
-                court_cases = st.session_state.loaded_data["court_cases"]
-                tax_cases = st.session_state.loaded_data["tax_cases"]
-                preprocessed_data = st.session_state.loaded_data["preprocessed_data"]
-
-                # 대화 맥락 가져오기
-                conversation_history = ""
-                if st.session_state.context_enabled:
-                    conversation_history = get_conversation_history(
-                        max_messages=st.session_state.get('max_history', 5)
-                    )
-
-                # === [섹션 1] 실시간 진행 상황 표시 ===
-                progress_display = st.empty()
-
-                # === [섹션 2] 에이전트 답변 동적 표시 (st.status) ===
-                agent_status = st.status("🤖 에이전트 답변 생성 중...", expanded=True, state='running')
-
-                # 에이전트 컨테이너 6개 미리 생성
-                agent_containers = []
-                with agent_status:
-                    for i in range(6):
-                        agent_containers.append(st.empty())
-
-                # === [섹션 3] 최종 답변 (예약) ===
-                final_answer_section = st.empty()
-
-                # === 에이전트 병렬 실행 및 실시간 UI 업데이트 ===
-                progress_display.markdown("⏳ 에이전트 실행 중...")
-
-                # 제너레이터로 실시간 처리
-                agent_responses = []
-                completed_count = 0
-
-                for result in run_parallel_agents(
-                    client, court_cases, tax_cases, preprocessed_data, prompt, conversation_history
-                ):
-                    # 에이전트 인덱스 추출 (예: "Agent 3" -> 2)
-                    agent_num = int(result['agent'].split()[-1]) - 1
-
-                    # 즉시 UI 업데이트
-                    with agent_containers[agent_num].container():
-                        st.subheader(f"📋 {result['agent']}")
-                        st.markdown(result['response'])
-                        if agent_num < 5:
                             st.divider()
 
-                    completed_count += 1
-                    progress_display.markdown(f"✓ {result['agent']} 완료 ({completed_count}/6)")
-
-                    agent_responses.append(result)
-
-                # 순서대로 정렬 (완료 순서가 다를 수 있으므로)
-                agent_responses.sort(key=lambda x: int(x['agent'].split()[-1]))
-
-                # 모든 에이전트 완료
-                progress_display.markdown("✓ 모든 에이전트 완료 | ⏳ 최종 답변 통합 중...")
-
-                # === Head Agent로 최종 응답 생성 ===
-                head_response = run_head_agent(
-                    client, agent_responses, prompt, conversation_history
-                )
-
-                # 응답 텍스트 추출
-                if isinstance(head_response, dict):
-                    final_response = head_response.get("response", "응답을 생성할 수 없습니다.")
-                else:
-                    final_response = head_response
-
-                # === [섹션 2] 자동으로 닫기 ===
-                agent_status.update(
-                    label="🤖 각 에이전트 답변 보기",
-                    state="complete",
-                    expanded=False
-                )
-
-                # === [섹션 1] 완료 상태 ===
-                progress_display.markdown("✅ 답변 생성 완료!")
-                time.sleep(0.3)
-                progress_display.empty()
-
-                # === [섹션 3] 최종 답변 표시 ===
-                with final_answer_section.container():
+                    # 최종 답변 표시
                     st.markdown("### 📌 최종 답변")
-                    st.markdown(final_response)
+                    st.markdown(message["content"])
 
-                # 응답 및 에이전트 답변 저장
-                st.session_state.messages.append({"role": "assistant", "content": final_response})
-                st.session_state.agent_responses_history.append(agent_responses)
+                    # assistant 카운터 증가
+                    assistant_count += 1
+                else:
+                    st.markdown(message["content"])
 
-            except Exception as e:
-                st.error(f"오류가 발생했습니다: {str(e)}")
-                logging.error(f"전체 처리 오류: {str(e)}")
-                # 오류 메시지도 저장
-                error_message = f"오류가 발생했습니다: {str(e)}"
-                st.session_state.messages.append({"role": "assistant", "content": error_message})
-                st.session_state.agent_responses_history.append([])  # 빈 리스트 추가 (인덱스 맞추기)
+        # 사용자 입력 처리
+        if prompt := st.chat_input("질문을 입력하세요..."):
 
-        # 처리 완료
-        st.session_state.processing = False
+            # 사용자 메시지 표시
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+
+            # 처리 시작
+            st.session_state.processing = True
+
+            # 응답 생성
+            with st.chat_message("assistant"):
+                try:
+                    # 저장된 데이터 사용
+                    court_cases = st.session_state.loaded_data["court_cases"]
+                    tax_cases = st.session_state.loaded_data["tax_cases"]
+                    preprocessed_data = st.session_state.loaded_data["preprocessed_data"]
+
+                    # 대화 맥락 가져오기
+                    conversation_history = ""
+                    if st.session_state.context_enabled:
+                        conversation_history = get_conversation_history(
+                            max_messages=st.session_state.get('max_history', 5)
+                        )
+
+                    # === [섹션 1] 실시간 진행 상황 표시 ===
+                    progress_display = st.empty()
+
+                    # === [섹션 2] 에이전트 답변 동적 표시 (st.status) ===
+                    agent_status = st.status("🤖 에이전트 답변 생성 중...", expanded=True, state='running')
+
+                    # 에이전트 컨테이너 6개 미리 생성
+                    agent_containers = []
+                    with agent_status:
+                        for i in range(6):
+                            agent_containers.append(st.empty())
+
+                    # === [섹션 3] 최종 답변 (예약) ===
+                    final_answer_section = st.empty()
+
+                    # === 에이전트 병렬 실행 및 실시간 UI 업데이트 ===
+                    progress_display.markdown("⏳ 에이전트 실행 중...")
+
+                    # 제너레이터로 실시간 처리
+                    agent_responses = []
+                    completed_count = 0
+
+                    for result in run_parallel_agents(
+                        st.session_state.client, court_cases, tax_cases, preprocessed_data, prompt, conversation_history
+                    ):
+                        # 에이전트 인덱스 추출 (예: "Agent 3" -> 2)
+                        agent_num = int(result['agent'].split()[-1]) - 1
+
+                        # 즉시 UI 업데이트
+                        with agent_containers[agent_num].container():
+                            st.subheader(f"📋 {result['agent']}")
+                            st.markdown(result['response'])
+                            if agent_num < 5:
+                                st.divider()
+
+                        completed_count += 1
+                        progress_display.markdown(f"✓ {result['agent']} 완료 ({completed_count}/6)")
+
+                        agent_responses.append(result)
+
+                    # 순서대로 정렬 (완료 순서가 다를 수 있으므로)
+                    agent_responses.sort(key=lambda x: int(x['agent'].split()[-1]))
+
+                    # 모든 에이전트 완료
+                    progress_display.markdown("✓ 모든 에이전트 완료 | ⏳ 최종 답변 통합 중...")
+
+                    # === Head Agent로 최종 응답 생성 ===
+                    head_response = run_head_agent(
+                        st.session_state.client, agent_responses, prompt, conversation_history
+                    )
+
+                    # 응답 텍스트 추출
+                    if isinstance(head_response, dict):
+                        final_response = head_response.get("response", "응답을 생성할 수 없습니다.")
+                    else:
+                        final_response = head_response
+
+                    # === [섹션 2] 자동으로 닫기 ===
+                    agent_status.update(
+                        label="🤖 각 에이전트 답변 보기",
+                        state="complete",
+                        expanded=False
+                    )
+
+                    # === [섹션 1] 완료 상태 ===
+                    progress_display.markdown("✅ 답변 생성 완료!")
+                    time.sleep(0.3)
+                    progress_display.empty()
+
+                    # === [섹션 3] 최종 답변 표시 ===
+                    with final_answer_section.container():
+                        st.markdown("### 📌 최종 답변")
+                        st.markdown(final_response)
+
+                    # 응답 및 에이전트 답변 저장
+                    st.session_state.messages.append({"role": "assistant", "content": final_response})
+                    st.session_state.agent_responses_history.append(agent_responses)
+
+                except Exception as e:
+                    st.error(f"오류가 발생했습니다: {str(e)}")
+                    logging.error(f"전체 처리 오류: {str(e)}")
+                    # 오류 메시지도 저장
+                    error_message = f"오류가 발생했습니다: {str(e)}"
+                    st.session_state.messages.append({"role": "assistant", "content": error_message})
+                    st.session_state.agent_responses_history.append([])  # 빈 리스트 추가 (인덱스 맞추기)
+
+            # 처리 완료
+            st.session_state.processing = False
 
 
 # ==================== 탭 2: 판례 검색 ====================
@@ -500,6 +530,7 @@ with tab2:
 
 # 사이드바에 사용 예시 및 정보 추가
 with st.sidebar:
+    st.markdown("---")
     st.subheader("프로젝트 정보")
     st.markdown("""
     이 챗봇은 관세법 판례를 기반으로 답변을 생성합니다.
